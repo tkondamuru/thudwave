@@ -195,7 +195,7 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0):
 
     frame_idx = 0
     fps_start_time = time.time()
-    fps_display = 30.0
+    fps_display = 60.0
     last_broadcast_time = 0.0
     last_broadcast_keys = None
     gui_available = show_gui
