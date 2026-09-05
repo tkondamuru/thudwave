@@ -40,6 +40,7 @@ class BallKalmanTracker:
         self.is_initialized = False
         self.missed_frames = 0
         self.history = []
+        self.kf.errorCovPost = np.eye(4, dtype=np.float32) * config.POST_ERROR_COV
         
     def predict(self):
         """Predicts the next state of the ball."""

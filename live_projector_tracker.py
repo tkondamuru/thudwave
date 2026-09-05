@@ -103,6 +103,7 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
     cap.set(cv2.CAP_PROP_FPS, 60)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     detector = GreenBallDetector()
     tracker = BallKalmanTracker()
@@ -122,6 +123,7 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
     ball_trail = []
     active_splash = None
     video_writer = None
+    show_mask = False
     cooldown_frames = 0
     hit_counter = 0
     quit_requested = False
@@ -254,8 +256,11 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
 
             if record_file and video_writer is None:
                 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                video_writer = cv2.VideoWriter(record_file, fourcc, 60.0, (w, h))
-                print(f"\n🎥 [Recording] Output video will be saved to: {record_file}\n")
+                rec_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+                if rec_fps < 10 or rec_fps > 120:
+                    rec_fps = 30.0
+                video_writer = cv2.VideoWriter(record_file, fourcc, rec_fps, (w, h))
+                print(f"\n🎥 [Recording] Output video will be saved to: {record_file} ({rec_fps:.0f} FPS)\n")
 
             if frame_idx % 30 == 0:
                 elapsed = time.time() - fps_start_time
@@ -290,15 +295,20 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
             # 2. Ball Detection & Rebound Physics (Active when manually locked)
             meas = None
             state = None
+            mask = None
             if is_locked and H_matrix is not None:
-                ball, _ = detector.detect(frame)
+                ball, mask = detector.detect(frame)
                 meas = ball['center'] if ball else None
                 state = tracker.update(meas)
 
                 if cooldown_frames > 0:
                     cooldown_frames -= 1
-
-                if meas is not None:
+                    # During cooldown: keep all buffers clean so floor rebound doesn't pollute next throw
+                    flight_history.clear()
+                    ball_trail.clear()
+                    tracker.reset()
+                    detector.reset()
+                elif meas is not None:
                     mx, my = meas
                     flight_history.append((frame_idx, mx, my))
                     ball_trail.append((int(mx), int(my)))
@@ -308,7 +318,7 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
                         ball_trail.pop(0)
 
                     # Directional Rebound trajectory calculation
-                    if len(flight_history) >= 6 and cooldown_frames == 0 and board_quad is not None:
+                    if len(flight_history) >= 6 and board_quad is not None:
                         for idx in [-2, -3, -4]:
                             if abs(idx) >= len(flight_history):
                                 continue
@@ -341,8 +351,11 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
                                 # In a physical rebound: cos_angle <= 0.35 (trajectory bends sharply or reverses).
                                 if cos_angle <= 0.35:
                                     hit_counter += 1
-                                    cooldown_frames = 35
+                                    cooldown_frames = 25
                                     flight_history.clear()
+                                    ball_trail.clear()
+                                    tracker.reset()
+                                    detector.reset()
 
                                     # Perspective transform using FROZEN H_matrix
                                     pt = np.array([[[xp, yp]]], dtype=np.float32)
@@ -362,10 +375,14 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
                                     send_hit_to_projector(nx, ny, hit_counter)
                                     break
                 else:
-                    if len(flight_history) > 0 and (frame_idx - flight_history[-1][0] > 10):
+                    # Ball is not detected (user picking up ball or ball at rest)
+                    # Clean slate reset: ready for the next throw immediately!
+                    if len(flight_history) > 0:
                         flight_history.clear()
+                        tracker.reset()
+                        detector.reset()
                     if len(ball_trail) > 0:
-                        ball_trail.pop(0)
+                        ball_trail.clear()
 
             # 3. Visual Annotations (Trail, Splash, Markers, Quad)
             active_tags = locked_board_tags if is_locked else board_tags
@@ -414,6 +431,14 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
                 if meas is not None:
                     cv2.circle(frame, (int(meas[0]), int(meas[1])), 4, (0, 255, 0), -1)
 
+            # Picture-in-Picture mask preview when [M] is toggled
+            if show_mask and mask is not None:
+                mask_thumb = cv2.resize(mask, (240, 135))
+                mask_bgr = cv2.cvtColor(mask_thumb, cv2.COLOR_GRAY2BGR)
+                frame[h - 145:h - 10, w - 250:w - 10] = mask_bgr
+                cv2.rectangle(frame, (w - 250, h - 145), (w - 10, h - 10), (0, 255, 255), 1)
+                cv2.putText(frame, "COLOR MASK [M]", (w - 245, h - 130), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+
             # Top HUD bar
             overlay = frame.copy()
             cv2.rectangle(overlay, (0, 0), (w, 52), (15, 15, 20), -1)
@@ -431,8 +456,8 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
 
             rec_indicator = " [REC 🔴]" if video_writer else ""
             cv2.putText(frame, st_text + rec_indicator, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.52, st_col, 2, cv2.LINE_AA)
-            metrics = f"{w}x{h} | {fps_display:.0f}FPS | Hits: {hit_counter} | [L] Lock | [Q] Quit"
-            cv2.putText(frame, metrics, (max(12, w - 420), 22), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (220, 220, 220), 1, cv2.LINE_AA)
+            metrics = f"{w}x{h} | {fps_display:.0f}FPS | Hits: {hit_counter} | [L] Lock | [M] Mask | [Q] Quit"
+            cv2.putText(frame, metrics, (max(12, w - 460), 22), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (220, 220, 220), 1, cv2.LINE_AA)
 
             # Write frame to video if recording
             if video_writer is not None:
@@ -447,6 +472,9 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
                         break
                     elif key in [ord('l'), ord('L')]:
                         toggle_lock()
+                    elif key in [ord('m'), ord('M')]:
+                        show_mask = not show_mask
+                        print(f"  [Debug] Mask preview: {'ON' if show_mask else 'OFF'}")
                     elif key in [ord('r'), ord('R')]:
                         rotation = (rotation + 90) % 360
                         print(f"\n  [Orientation] Frame rotated to {rotation}°")

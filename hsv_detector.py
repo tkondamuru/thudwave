@@ -68,17 +68,26 @@ class GreenBallDetector:
                 circularity = (4 * np.pi * area) / (perimeter * perimeter) if perimeter > 0 else 0
                 
                 if circularity >= config.MIN_CIRCULARITY:
-                    (x, y), radius = cv2.minEnclosingCircle(c)
-                    score = area * circularity
-                    if score > best_score:
-                        best_score = score
-                        # Rescale coordinates back to original frame space
-                        best_candidate = {
-                            'center': (float(x / scale), float(y / scale)),
-                            'radius': float(radius / scale),
-                            'area': float(area / (scale * scale)),
-                            'circularity': float(circularity),
-                            'contour': c
-                        }
+                    # Filter out elongated shapes (hands, fingers, arms have aspect ratios far from 1.0)
+                    _, _, bw, bh = cv2.boundingRect(c)
+                    aspect = float(bw) / float(bh) if bh > 0 else 0.0
+                    if 0.65 <= aspect <= 1.55:
+                        (x, y), radius = cv2.minEnclosingCircle(c)
+                        # Score by circularity so a spherical ball always beats irregular hands
+                        score = circularity
+                        if score > best_score:
+                            best_score = score
+                            # Rescale coordinates back to original frame space
+                            best_candidate = {
+                                'center': (float(x / scale), float(y / scale)),
+                                'radius': float(radius / scale),
+                                'area': float(area / (scale * scale)),
+                                'circularity': float(circularity),
+                                'contour': c
+                            }
                         
         return best_candidate, mask
+
+    def reset(self):
+        """Clears frame difference buffer to cleanly restart motion detection."""
+        self.prev_gray = None
