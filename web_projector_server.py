@@ -39,6 +39,15 @@ client_queues = []
 clients_lock = threading.Lock()
 shutdown_event = threading.Event()
 
+latest_tracker_status = {
+    "event": "TRACKER_STATUS",
+    "markers": [],
+    "count": 0,
+    "locked": False,
+    "message": "Searching..."
+}
+tracker_status_lock = threading.Lock()
+
 class ProjectorServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
@@ -72,8 +81,11 @@ class ProjectorHTTPHandler(http.server.SimpleHTTPRequestHandler):
 
             last_ping = time.time()
             try:
-                # Send initial connection event
+                # Send initial connection event AND current tracker status immediately
                 self.wfile.write(b"data: {\"event\": \"CONNECTED\"}\n\n")
+                with tracker_status_lock:
+                    initial_status = f"data: {json.dumps(latest_tracker_status)}\n\n".encode('utf-8')
+                self.wfile.write(initial_status)
                 self.wfile.flush()
 
                 while not shutdown_event.is_set():
@@ -134,26 +146,32 @@ class ProjectorHTTPHandler(http.server.SimpleHTTPRequestHandler):
             # Broadcast ArUco identification status from Python tracker to browser
             from urllib.parse import urlparse, parse_qs
             query = parse_qs(urlparse(self.path).query)
-            markers_str = query.get('markers', [''])[0]
+            markers_str = query.get('markers', [None])[0]
             is_locked = query.get('locked', ['0'])[0] in ['1', 'true', 'True']
-            markers = [int(m) for m in markers_str.split(',') if m.strip().isdigit()]
             msg = query.get('msg', [''])[0]
-            event = {
-                "event": "TRACKER_STATUS",
-                "markers": sorted(markers),
-                "count": len(markers),
-                "locked": is_locked,
-                "message": msg,
-                "timestamp_ms": int(time.time() * 1000)
-            }
-            with clients_lock:
-                for q in client_queues:
-                    q.put(event)
+
+            global latest_tracker_status
+            with tracker_status_lock:
+                if markers_str is not None:
+                    markers = [int(m) for m in markers_str.split(',') if m.strip().isdigit()]
+                    latest_tracker_status = {
+                        "event": "TRACKER_STATUS",
+                        "markers": sorted(markers),
+                        "count": len(markers),
+                        "locked": is_locked,
+                        "message": msg,
+                        "timestamp_ms": int(time.time() * 1000)
+                    }
+                    with clients_lock:
+                        for q in client_queues:
+                            q.put(latest_tracker_status)
+                body = json.dumps(latest_tracker_status).encode('utf-8')
+
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
-            self.wfile.write(b'{"status": "ok"}')
+            self.wfile.write(body)
 
         else:
             # Serve index.html or other static files from /web

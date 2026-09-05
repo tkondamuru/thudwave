@@ -1,13 +1,12 @@
 """
-Interactive Whiteboard Ball Tracker (macOS Edition)
-1. Auto-detects iPhone Continuity Camera or Mac Built-in Camera.
-2. Identifies 4 ArUco corner tags (TL: 3, TR: 2, BR: 1, BL: 0).
-3. Manual Lock [L] in OpenCV Window or Terminal:
-   - When 4/4 corners are identified, press [L] to freeze them permanently.
-   - Pauses ArUco scanning while locked (zero jitter, zero readjustment).
-   - Refuses to lock if not all 4 corners are identified.
-   - Press [L] again to unlock if laptop/camera position changes.
-4. Syncs identified marker state to web projector server.
+Interactive Whiteboard Ball Tracker
+Features:
+- Pure manual lock: NEVER auto-locks.
+- Continuously identifies ArUco markers (0/4, 1/4, 2/4, 3/4, 4/4).
+- Press [L] or [l] (in OpenCV window or Terminal) to LOCK when 4/4 are identified.
+- Press [L] or [l] to UNLOCK anytime to re-scan.
+- When locked: pauses ArUco scanning (zero jitter) and activates ball rebound tracking.
+- Sends hit events to http://127.0.0.1:8000/hit.
 """
 
 import cv2
@@ -25,9 +24,8 @@ from hsv_detector import GreenBallDetector
 from kalman_tracker import BallKalmanTracker
 from aruco_detector import ArUcoTagDetector
 
-SERVER_URL = "http://localhost:8000/hit"
-STATUS_URL = "http://localhost:8000/tracker_status"
-LOCKED_CORNERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "locked_whiteboard_corners.json")
+SERVER_URL = "http://127.0.0.1:8000/hit"
+STATUS_URL = "http://127.0.0.1:8000/tracker_status"
 
 def send_hit_to_projector(nx, ny, hit_num):
     """Sends normalized hit coordinate [0.0 to 1.0] asynchronously to projector server."""
@@ -59,11 +57,7 @@ def send_tracker_status(markers, is_locked):
     threading.Thread(target=_send, daemon=True).start()
 
 def auto_detect_camera():
-    """
-    On macOS:
-    - Index 0: Built-in FaceTime HD Camera.
-    - Index 1: iPhone Continuity Camera.
-    """
+    """Probes available cameras and picks an active one."""
     print("[Camera] Auto-detecting camera...")
     for idx in [0, 1, 2]:
         try:
@@ -72,7 +66,7 @@ def auto_detect_camera():
                 ret, frame = cap.read()
                 if ret and frame is not None:
                     cap.release()
-                    label = "Mac Built-in Camera" if idx == 0 else "iPhone / External Camera"
+                    label = "Built-in Camera" if idx == 0 else "External / iPhone Camera"
                     print(f"  [OK] Connected to Camera [{idx}] ({label})\n")
                     return idx
                 cap.release()
@@ -81,7 +75,7 @@ def auto_detect_camera():
     print("  Defaulting to Camera [0]\n")
     return 0
 
-def run_mac_tracker(camera_index=None, show_gui=True, rotation=0):
+def run_tracker(camera_index=None, show_gui=True, rotation=0):
     if camera_index is None:
         camera_index = auto_detect_camera()
 
@@ -98,7 +92,7 @@ def run_mac_tracker(camera_index=None, show_gui=True, rotation=0):
     tracker = BallKalmanTracker()
     aruco = ArUcoTagDetector()
 
-    # Whiteboard Corner Map & Lock State
+    # Whiteboard Corner Map & Lock State (NEVER AUTO-LOCKS)
     board_tags = {}
     is_locked = False
     locked_board_tags = None
@@ -110,7 +104,6 @@ def run_mac_tracker(camera_index=None, show_gui=True, rotation=0):
     flight_history = []
     cooldown_frames = 0
     hit_counter = 0
-
     quit_requested = False
 
     def toggle_lock():
@@ -121,7 +114,7 @@ def run_mac_tracker(camera_index=None, show_gui=True, rotation=0):
             # Check if all 4 corners (TL:3, TR:2, BR:1, BL:0) are identified
             missing_ids = [m for m in [3, 2, 1, 0] if m not in board_tags]
             if not missing_ids:
-                # All 4 corners present! Lock them permanently
+                # All 4 corners present! Lock them
                 is_locked = True
                 locked_board_tags = {k: board_tags[k] for k in [0, 1, 2, 3]}
 
@@ -134,21 +127,14 @@ def run_mac_tracker(camera_index=None, show_gui=True, rotation=0):
                 dst_pts = np.float32([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
                 H_matrix = cv2.getPerspectiveTransform(src_pts, dst_pts)
 
-                # Persist to JSON
-                try:
-                    with open(LOCKED_CORNERS_FILE, 'w', encoding='utf-8') as f:
-                        json.dump({str(k): list(v) for k, v in locked_board_tags.items()}, f, indent=2)
-                except Exception:
-                    pass
-
                 send_tracker_status([0, 1, 2, 3], is_locked=True)
 
                 print("\n" + "=" * 65)
                 print(" 🔒 [LOCKED] 4 Whiteboard Corners FROZEN in place!")
-                print("=" * 65)
+                print("   • Sent lock update to browser! (Whiteboard LOCKED)")
                 print(f"   • TL(3): {locked_board_tags[3]}   TR(2): {locked_board_tags[2]}")
                 print(f"   • BL(0): {locked_board_tags[0]}   BR(1): {locked_board_tags[1]}")
-                print("   • ArUco scanning is PAUSED (Zero jitter, Zero readjustment).")
+                print("   • ArUco scanning is PAUSED (Zero jitter).")
                 print("   • Ball rebound tracking is ACTIVE. Ready to throw ball!")
                 print("   • Press [L] again to unlock if you move the camera/laptop.")
                 print("=" * 65 + "\n")
@@ -157,29 +143,28 @@ def run_mac_tracker(camera_index=None, show_gui=True, rotation=0):
                 missing_names = [tag_names[m] for m in missing_ids]
                 found_count = 4 - len(missing_ids)
 
-                send_tracker_status(list(board_tags.keys()), is_locked=False)
-
                 print("\n" + "!" * 65)
                 print(f" ⚠️ [CANNOT LOCK] Only {found_count}/4 corners identified!")
                 print(f"   Missing: {', '.join(missing_names)}")
                 print("   Camera must see all 4 corners before locking.")
-                print("   Adjust camera angle, then press [L] once all 4 are visible.")
+                print("   (Did not send any update to browser)")
                 print("!" * 65 + "\n")
         else:
             # Unlock corners
             is_locked = False
             locked_board_tags = None
             H_matrix = None
-            send_tracker_status(list(board_tags.keys()), is_locked=False)
+            send_tracker_status([], is_locked=False)
 
             print("\n" + "=" * 65)
             print(" 🔓 [UNLOCKED] Whiteboard corners unlocked!")
-            print("=" * 65)
+            print("   • Sent unlock update to browser.")
             print("   • Live ArUco scanning resumed.")
             print("   • Reposition camera as needed.")
             print("   • Press [L] when all 4 corners are visible to re-lock.")
             print("=" * 65 + "\n")
 
+    # Terminal keyboard listener thread
     def on_terminal_input():
         nonlocal quit_requested
         while True:
@@ -200,16 +185,13 @@ def run_mac_tracker(camera_index=None, show_gui=True, rotation=0):
     term_thread.start()
 
     print("=" * 65)
-    print(" 🎯 LIVE PROJECTOR TRACKER ACTIVE (macOS)")
+    print(" 🎯 LIVE PROJECTOR TRACKER ACTIVE")
     print("=" * 65)
-    print(" • Web Projector: http://localhost:8000 on projector screen")
+    print(" • Web Projector: http://localhost:8000")
     print(" • Markers: [3] Top-Left | [2] Top-Right | [1] Bottom-Right | [0] Bottom-Left")
-    print(" • Controls: Press [L] to Lock/Unlock (in Preview Window or Terminal)")
-    print("             Press [Q] to Quit, [R] to Rotate Preview")
+    print(" • NO AUTO-LOCK: Press [L] or [l] to Lock/Unlock (in Window or Terminal)")
+    print(" • Press [Q] to Quit, [R] to Rotate Preview")
     print("=" * 65 + "\n")
-
-    # Initial sync to server
-    send_tracker_status([], is_locked=False)
 
     frame_idx = 0
     fps_start_time = time.time()
@@ -250,7 +232,7 @@ def run_mac_tracker(camera_index=None, show_gui=True, rotation=0):
 
             # 1. ArUco Marker Scanning
             # When LOCKED: Paused completely (0 jitter, 0 readjustment, 0 CPU)
-            # When UNLOCKED: Scans every 2 frames
+            # When UNLOCKED: Scans every 2 frames, NEVER AUTO-LOCKS
             if not is_locked:
                 if (frame_idx == 1) or (frame_idx % 2 == 0):
                     tags = aruco.detect(frame)
@@ -259,15 +241,22 @@ def run_mac_tracker(camera_index=None, show_gui=True, rotation=0):
                             if m_id in [0, 1, 2, 3]:
                                 board_tags[m_id] = (int(info['center'][0]), int(info['center'][1]))
 
-                # Broadcast sync to web projector (on change or every 1.5s)
+                # Print progress to terminal only (ZERO updates sent to browser until [L] is pressed)
                 now = time.time()
                 current_keys = tuple(sorted(board_tags.keys()))
-                if (current_keys != last_broadcast_keys) or (now - last_broadcast_time > 1.5):
+                if (current_keys != last_broadcast_keys) or (now - last_broadcast_time > 1.0):
                     last_broadcast_keys = current_keys
                     last_broadcast_time = now
-                    send_tracker_status(list(current_keys), is_locked=False)
 
-            # 2. Ball Detection & Rebound Physics (Active when locked)
+                    tag_names = {3: "TL(3)", 2: "TR(2)", 1: "BR(1)", 0: "BL(0)"}
+                    found_names = [tag_names[k] for k in sorted(board_tags.keys(), reverse=True)]
+                    if len(board_tags) == 4:
+                        status_str = "🎯 [4/4 IDENTIFIED] All 4 corners in view! Press [L] on terminal to lock."
+                    else:
+                        status_str = f"📷 [{len(board_tags)}/4 Identified] Found: {', '.join(found_names) if found_names else 'Searching...'}"
+                    print(f"\r{status_str}", end="", flush=True)
+
+            # 2. Ball Detection & Rebound Physics (Active when manually locked)
             meas = None
             state = None
             if is_locked and H_matrix is not None:
@@ -308,7 +297,7 @@ def run_mac_tracker(camera_index=None, show_gui=True, rotation=0):
                                     nx = max(0.0, min(1.0, float(trans[0])))
                                     ny = max(0.0, min(1.0, float(trans[1])))
 
-                                    print(f"\n💥 [IMPACT #{hit_counter}] Rebound at X={nx:.3f}, Y={ny:.3f} (Speed={v_in:.0f}px/f) -> Broadcasted to Projector!")
+                                    print(f"\n💥 [IMPACT #{hit_counter}] Rebound at X={nx:.3f}, Y={ny:.3f} -> Broadcasted to Projector!")
                                     send_hit_to_projector(nx, ny, hit_counter)
                                     break
                 else:
@@ -350,13 +339,13 @@ def run_mac_tracker(camera_index=None, show_gui=True, rotation=0):
                     cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
 
                     if is_locked:
-                        st_text = "🔒 LOCKED ✓ (PRESS [L] TO UNLOCK)"
+                        st_text = "🔒 LOCKED (PRESS [L] TO UNLOCK)"
                         st_col = (0, 255, 128)
                     elif len(board_tags) == 4:
                         st_text = "🎯 4/4 IDENTIFIED: PRESS [L] TO LOCK"
                         st_col = (0, 255, 255)
                     else:
-                        st_text = f"AIM AT CORNERS: {len(board_tags)}/4 IDENTIFIED (PRESS [L] WHEN 4/4)"
+                        st_text = f"SEARCHING: {len(board_tags)}/4 IDENTIFIED (PRESS [L] WHEN 4/4)"
                         st_col = (0, 200, 255) if len(board_tags) > 0 else (80, 80, 255)
 
                     cv2.putText(frame, st_text, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.52, st_col, 2, cv2.LINE_AA)
@@ -387,10 +376,10 @@ def run_mac_tracker(camera_index=None, show_gui=True, rotation=0):
         print("Tracker stopped cleanly.")
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Interactive Projector Whiteboard Tracker for macOS")
+    parser = argparse.ArgumentParser(description="Interactive Projector Whiteboard Tracker")
     parser.add_argument("--camera", type=int, default=None, help="Camera index (default: auto-detect)")
     parser.add_argument("--no-gui", action="store_true", help="Pure console mode without preview window")
     parser.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270], help="Rotate frame (degrees)")
     args = parser.parse_args()
 
-    run_mac_tracker(camera_index=args.camera, show_gui=not args.no_gui, rotation=args.rotate)
+    run_tracker(camera_index=args.camera, show_gui=not args.no_gui, rotation=args.rotate)

@@ -113,7 +113,7 @@
         <button class="btn" id="calib-btn" onclick="toggleCalibration()">Mode: Adjust Pins [C]</button>
         <button class="btn" onclick="triggerTestHit()">Test Hit [T]</button>
         <button class="btn" onclick="resetCalibration()">Reset Pins</button>
-        <div id="tracker-pill">Camera: Searching...</div>
+        <div id="tracker-pill" style="display: none;"></div>
         <div style="color: #888; font-size: 11px;">[F11] Fullscreen | [C] Mode | Arrow keys nudge pin</div>
     </div>
 
@@ -547,6 +547,21 @@
         requestAnimationFrame(render);
 
         // -------------------------------------------------------------
+        // Tracker Lock Status (Only shown when [L] is pressed on tracker)
+        // -------------------------------------------------------------
+        function updateTrackerUI(data) {
+            if (!data) return;
+            if (data.locked) {
+                trackerPill.style.display = "inline-block";
+                trackerPill.innerHTML = `🔒 <b>Whiteboard: LOCKED</b> (Ready to Play)`;
+                trackerPill.style.color = "#00ff88";
+                trackerPill.style.borderColor = "#00ff88";
+            } else {
+                trackerPill.style.display = "none";
+            }
+        }
+
+        // -------------------------------------------------------------
         // Real-Time Server-Sent Events (SSE) from Python Backend
         // -------------------------------------------------------------
         function connectToServer() {
@@ -563,25 +578,7 @@
                     if (data.event === 'HIT') {
                         triggerImpact(data.nx, data.ny, `HIT #${data.hit_num || totalHits + 1}`);
                     } else if (data.event === 'TRACKER_STATUS') {
-                        // Keep browser and live tracker 100% in sync!
-                        const tagNames = {3: "TL", 2: "TR", 1: "BR", 0: "BL"};
-                        const markers = data.markers || [];
-                        const count = data.count !== undefined ? data.count : markers.length;
-
-                        if (data.locked) {
-                            trackerPill.innerHTML = `🔒 <b>4/4 Corners LOCKED</b> (Ready to Play)`;
-                            trackerPill.style.color = "#00ff88";
-                            trackerPill.style.borderColor = "#00ff88";
-                        } else if (count === 4) {
-                            trackerPill.innerHTML = `🎯 <b>4/4 Identified</b> (Press [L] in CV window to lock)`;
-                            trackerPill.style.color = "#00ffcc";
-                            trackerPill.style.borderColor = "#00ffcc";
-                        } else {
-                            const foundList = markers.map(id => tagNames[id] || id).join(', ');
-                            trackerPill.innerHTML = `📷 Camera: <b>${count}/4</b> [${foundList || 'Searching'}]`;
-                            trackerPill.style.color = count > 0 ? "#ffaa00" : "#ff4444";
-                            trackerPill.style.borderColor = count > 0 ? "#ffaa00" : "#ff4444";
-                        }
+                        updateTrackerUI(data);
                     }
                 } catch (err) {
                     console.error("Error parsing event:", err);
