@@ -51,19 +51,21 @@ def send_tracker_status(msg, state="INFO", markers=None):
 
 def auto_detect_camera():
     """
-    On macOS with an iPhone nearby, Continuity Camera is typically index 1 (on MacBooks)
-    or index 0 (on Mac mini/Studio). Probes available cameras and picks the active one.
+    On macOS:
+    - Index 0 is the Mac Built-in FaceTime HD Camera.
+    - Index 1 is the iPhone Continuity Camera (when connected/active).
+    Probes available cameras and picks the active one.
     """
-    print("🔍 Auto-detecting camera (checking iPhone Continuity Camera & Mac)...")
-    for idx in [1, 0, 2]:
+    print("[Camera] Auto-detecting camera...")
+    for idx in [0, 1, 2]:
         try:
             cap = cv2.VideoCapture(idx)
             if cap.isOpened():
                 ret, frame = cap.read()
                 if ret and frame is not None:
                     cap.release()
-                    label = "iPhone Continuity Camera" if idx == 1 else "Primary Mac Camera"
-                    print(f"  ✓ Connected to Camera [{idx}] ({label})\n")
+                    label = "Mac Built-in Camera" if idx == 0 else "iPhone / External Camera"
+                    print(f"  [OK] Connected to Camera [{idx}] ({label})\n")
                     return idx
                 cap.release()
         except Exception:
