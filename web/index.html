@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project THUD-WAVE: Whiteboard Projector Canvas</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000000;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            user-select: none;
+        }
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+        /* Top Navigation / Status Header */
+        #hud {
+            position: absolute;
+            top: 15px;
+            left: 20px;
+            z-index: 10;
+            color: #00ffcc;
+            font-size: 14px;
+            background: rgba(10, 10, 15, 0.75);
+            padding: 8px 16px;
+            border-radius: 6px;
+            border: 1px solid rgba(0, 255, 204, 0.3);
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            backdrop-filter: blur(4px);
+            transition: opacity 0.3s;
+        }
+        #hud.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: #ff3366;
+            display: inline-block;
+            box-shadow: 0 0 8px #ff3366;
+        }
+        .status-dot.connected {
+            background-color: #00ff88;
+            box-shadow: 0 0 8px #00ff88;
+        }
+        .btn {
+            background: #111;
+            color: #00ffcc;
+            border: 1px solid #00ffcc;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn:hover {
+            background: #00ffcc;
+            color: #000;
+        }
+        /* Instruction overlay for calibration */
+        #calib-guide {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            color: #ffffff;
+            font-size: 14px;
+            background: rgba(0, 0, 0, 0.85);
+            padding: 10px 24px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            text-align: center;
+            pointer-events: none;
+            transition: opacity 0.3s;
+        }
+        #calib-guide.hidden {
+            opacity: 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="hud">
+        <div><span id="conn-dot" class="status-dot"></span> <span id="conn-text">Connecting to Python...</span></div>
+        <div id="hit-counter">Hits: 0</div>
+        <button class="btn" id="calib-btn" onclick="toggleCalibration()">Mode: Adjust Pins [C]</button>
+        <button class="btn" onclick="triggerTestHit()">Test Hit [T]</button>
+        <button class="btn" onclick="resetCalibration()">Reset Pins</button>
+        <div style="color: #888; font-size: 11px;">[F11] Fullscreen | Arrow keys nudge pin</div>
+    </div>
+
+    <div id="calib-guide">
+        📍 <b>Previous Pins Restored</b>: Showing saved corner positions. Drag pins if projector moved, or press <b>[C]</b> to lock & start Game Mode.
+    </div>
+
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const hud = document.getElementById('hud');
+        const calibGuide = document.getElementById('calib-guide');
+        const calibBtn = document.getElementById('calib-btn');
+        const connDot = document.getElementById('conn-dot');
+        const connText = document.getElementById('conn-text');
+        const hitCounter = document.getElementById('hit-counter');
+
+        let totalHits = 0;
+        let isCalibrationMode = true; // Always start in calibration mode on reload to let user verify/adjust pins
+        let activeHandleIndex = -1;
+        let hoveredHandleIndex = -1;
+        let selectedHandleIndex = 0; // For arrow key nudging
+        const HANDLE_RADIUS = 20;
+
+        // 4 Calibration Corners in Normalized Screen Space (0.0 to 1.0)
+        // Order: Top-Left (0), Top-Right (1), Bottom-Right (2), Bottom-Left (3)
+        let corners = [
+            { x: 0.15, y: 0.15 }, // TL
+            { x: 0.85, y: 0.15 }, // TR
+            { x: 0.85, y: 0.85 }, // BR
+            { x: 0.15, y: 0.85 }  // BL
+        ];
+
+        let hasSavedCalibration = false;
+
+        // 1. Immediately load saved calibration from localStorage (zero flicker)
+        const saved = localStorage.getItem('thudwave_corners');
+        if (saved) {
+            try {
+                const parsed = JSON.parse(saved);
+                if (Array.isArray(parsed) && parsed.length === 4) {
+                    corners = parsed;
+                    hasSavedCalibration = true;
+                }
+            } catch (e) {}
+        }
+
+        // 2. Fetch server-persisted calibration (projector_calibration.json)
+        async function fetchServerCalibration() {
+            try {
+                const res = await fetch('/calibration');
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && Array.isArray(data.corners) && data.corners.length === 4) {
+                        corners = data.corners;
+                        hasSavedCalibration = true;
+                        localStorage.setItem('thudwave_corners', JSON.stringify(corners));
+                        updateGuideText();
+                    }
+                }
+            } catch (err) {
+                // Offline / server starting
+            }
+        }
+        fetchServerCalibration();
+
+        // 3. Save calibration both to localStorage AND server
+        function saveCalibration() {
+            hasSavedCalibration = true;
+            localStorage.setItem('thudwave_corners', JSON.stringify(corners));
+            fetch('/calibration', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ corners: corners, timestamp: Date.now() })
+            }).catch(() => {});
+        }
+
+        function updateGuideText() {
+            if (isCalibrationMode) {
+                if (hasSavedCalibration) {
+                    calibGuide.innerHTML = `📍 <b>Previous Pins Restored</b>: Showing your saved pin positions.<br>Drag any pin if projector moved, or press <b>[C]</b> to lock & start Game Mode.`;
+                } else {
+                    calibGuide.innerHTML = `🎯 <b>Calibration Mode Active</b>: Drag the 4 corner pins with mouse to align with whiteboard edges.<br>Press <b>[C]</b> to lock & start Game Mode.`;
+                }
+            }
+        }
+
+        // Active shockwave ripple animations
+        const ripples = [];
+
+        // Camera Tracker & ArUco Lock State
+        // Pin 0 = TL (Tag 3), Pin 1 = TR (Tag 2), Pin 2 = BR (Tag 1), Pin 3 = BL (Tag 0)
+        const PIN_TO_MARKER = [3, 2, 1, 0];
+        let trackerStatus = {
+            message: "",
+            state: "IDLE",
+            timestamp: 0,
+            markers: new Set()
+        };
+
+        // -------------------------------------------------------------
+        // Web Audio API Synthesizer (Instant 0ms Audio - Zero Files Needed!)
+        // -------------------------------------------------------------
+        let audioCtx = null;
+        function getAudioContext() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            return audioCtx;
+        }
+
+        // Deep Sub-Bass BOOM! Sound
+        function playBoomSound() {
+            try {
+                const ctx = getAudioContext();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+
+                osc.type = 'sine';
+                // Frequency drop: 160Hz -> 30Hz for a deep chest-thumping impact
+                osc.frequency.setValueAtTime(160, ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(30, ctx.currentTime + 0.35);
+
+                gain.gain.setValueAtTime(1.0, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
+
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+
+                osc.start();
+                osc.stop(ctx.currentTime + 0.36);
+            } catch (e) {}
+        }
+
+        // Arcade Comic "BOING" Sound
+        function playBoingSound() {
+            try {
+                const ctx = getAudioContext();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(250, ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(600, ctx.currentTime + 0.18);
+
+                gain.gain.setValueAtTime(0.7, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.22);
+
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+
+                osc.start();
+                osc.stop(ctx.currentTime + 0.23);
+            } catch (e) {}
+        }
+
+        // -------------------------------------------------------------
+        // Canvas Resize & Coordinate Transformation
+        // -------------------------------------------------------------
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Bilinear Perspective mapping from normalized whiteboard coords (nx, ny) [0..1]
+        // to calibrated screen pixel coordinates (px, py)
+        function mapWhiteboardToScreen(nx, ny) {
+            // Bilinear interpolation between 4 corners
+            const W = canvas.width;
+            const H = canvas.height;
+            const p0 = { x: corners[0].x * W, y: corners[0].y * H }; // TL
+            const p1 = { x: corners[1].x * W, y: corners[1].y * H }; // TR
+            const p2 = { x: corners[2].x * W, y: corners[2].y * H }; // BR
+            const p3 = { x: corners[3].x * W, y: corners[3].y * H }; // BL
+
+            // Top edge interpolation at nx
+            const topX = p0.x + (p1.x - p0.x) * nx;
+            const topY = p0.y + (p1.y - p0.y) * nx;
+
+            // Bottom edge interpolation at nx
+            const botX = p3.x + (p2.x - p3.x) * nx;
+            const botY = p3.y + (p2.y - p3.y) * nx;
+
+            // Vertical interpolation between top and bottom at ny
+            return {
+                x: topX + (botX - topX) * ny,
+                y: topY + (botY - topY) * ny
+            };
+        }
+
+        // Inverse mapping: screen pixel (px, py) to normalized whiteboard (nx, ny)
+        function mapScreenToWhiteboard(px, py) {
+            // Simple approximation for mouse testing
+            const W = canvas.width;
+            const H = canvas.height;
+            const minX = Math.min(...corners.map(c => c.x * W));
+            const maxX = Math.max(...corners.map(c => c.x * W));
+            const minY = Math.min(...corners.map(c => c.y * H));
+            const maxY = Math.max(...corners.map(c => c.y * H));
+            const nx = Math.max(0, Math.min(1, (px - minX) / (maxX - minX)));
+            const ny = Math.max(0, Math.min(1, (py - minY) / (maxY - minY)));
+            return { nx, ny };
+        }
+
+        // -------------------------------------------------------------
+        // Shockwave Impact Spawner
+        // -------------------------------------------------------------
+        function triggerImpact(nx, ny, label) {
+            const screenPt = mapWhiteboardToScreen(nx, ny);
+            totalHits++;
+            hitCounter.innerText = `Hits: ${totalHits}`;
+
+            // Play audio
+            playBoomSound();
+
+            // Create expanding kinetic shockwave rings
+            ripples.push({
+                x: screenPt.x,
+                y: screenPt.y,
+                radius: 10,
+                maxRadius: 180,
+                color: (totalHits % 2 === 0) ? '#00ffff' : '#ff00ff',
+                alpha: 1.0,
+                label: label || `HIT #${totalHits}`,
+                life: 1.0
+            });
+        }
+
+        function triggerTestHit() {
+            // Random point inside whiteboard
+            const rx = 0.2 + Math.random() * 0.6;
+            const ry = 0.2 + Math.random() * 0.6;
+            triggerImpact(rx, ry, `TEST #${totalHits + 1}`);
+        }
+
+        // -------------------------------------------------------------
+        // Mouse & Keyboard Controls
+        // -------------------------------------------------------------
+        canvas.addEventListener('mousedown', (e) => {
+            getAudioContext(); // Unlock audio on first user click
+            const mouseX = e.clientX;
+            const mouseY = e.clientY;
+            const W = canvas.width;
+            const H = canvas.height;
+
+            if (isCalibrationMode) {
+                // Check if user clicked on any corner pin to drag
+                for (let i = 0; i < 4; i++) {
+                    const cx = corners[i].x * W;
+                    const cy = corners[i].y * H;
+                    const dist = Math.hypot(mouseX - cx, mouseY - cy);
+                    if (dist <= HANDLE_RADIUS + 14) {
+                        activeHandleIndex = i;
+                        selectedHandleIndex = i;
+                        canvas.style.cursor = 'grabbing';
+                        return;
+                    }
+                }
+                // In calibration mode, ignore canvas clicks outside pins to avoid accidental impacts
+                return;
+            }
+
+            // In Game Mode: trigger an impact at clicked spot!
+            const norm = mapScreenToWhiteboard(mouseX, mouseY);
+            triggerImpact(norm.nx, norm.ny, `CLICK #${totalHits + 1}`);
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            const W = canvas.width;
+            const H = canvas.height;
+
+            if (isCalibrationMode) {
+                if (activeHandleIndex !== -1) {
+                    corners[activeHandleIndex].x = Math.max(0.01, Math.min(0.99, e.clientX / W));
+                    corners[activeHandleIndex].y = Math.max(0.01, Math.min(0.99, e.clientY / H));
+                    saveCalibration();
+                    canvas.style.cursor = 'grabbing';
+                } else {
+                    // Hover check for cursor feedback
+                    let hovering = -1;
+                    for (let i = 0; i < 4; i++) {
+                        const cx = corners[i].x * W;
+                        const cy = corners[i].y * H;
+                        if (Math.hypot(e.clientX - cx, e.clientY - cy) <= HANDLE_RADIUS + 14) {
+                            hovering = i;
+                            break;
+                        }
+                    }
+                    hoveredHandleIndex = hovering;
+                    canvas.style.cursor = (hovering !== -1) ? 'grab' : 'default';
+                }
+            } else {
+                canvas.style.cursor = 'default';
+            }
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (activeHandleIndex !== -1) {
+                saveCalibration();
+            }
+            activeHandleIndex = -1;
+            if (isCalibrationMode) {
+                canvas.style.cursor = (hoveredHandleIndex !== -1) ? 'grab' : 'default';
+            }
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'c' || e.key === 'C') {
+                toggleCalibration();
+            } else if (e.key === 't' || e.key === 'T') {
+                triggerTestHit();
+            } else if (e.key === 'h' || e.key === 'H') {
+                hud.classList.toggle('hidden');
+            } else if (isCalibrationMode && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+                // Precision arrow-key nudge for the selected corner pin
+                e.preventDefault();
+                const step = e.shiftKey ? 0.01 : 0.002; // Fine step (approx 1-2px)
+                const pin = corners[selectedHandleIndex];
+                if (e.key === 'ArrowUp') pin.y = Math.max(0.01, pin.y - step);
+                if (e.key === 'ArrowDown') pin.y = Math.min(0.99, pin.y + step);
+                if (e.key === 'ArrowLeft') pin.x = Math.max(0.01, pin.x - step);
+                if (e.key === 'ArrowRight') pin.x = Math.min(0.99, pin.x + step);
+                saveCalibration();
+            } else if (isCalibrationMode && ['1', '2', '3', '4'].includes(e.key)) {
+                // Select corner pin 1..4 directly
+                selectedHandleIndex = parseInt(e.key) - 1;
+            }
+        });
+
+        function toggleCalibration() {
+            isCalibrationMode = !isCalibrationMode;
+            if (isCalibrationMode) {
+                calibBtn.innerText = "Mode: Adjust Pins [C]";
+                calibBtn.style.borderColor = "#00ffcc";
+                calibGuide.classList.remove('hidden');
+                updateGuideText();
+            } else {
+                saveCalibration();
+                calibBtn.innerText = "Mode: Active Game [C]";
+                calibBtn.style.borderColor = "#ff3366";
+                calibGuide.classList.add('hidden');
+            }
+        }
+
+        function resetCalibration() {
+            corners = [
+                { x: 0.15, y: 0.15 },
+                { x: 0.85, y: 0.15 },
+                { x: 0.85, y: 0.85 },
+                { x: 0.15, y: 0.85 }
+            ];
+            hasSavedCalibration = false;
+            saveCalibration();
+            updateGuideText();
+        }
+
+        // -------------------------------------------------------------
+        // Main Animation Loop (60 FPS Canvas Render)
+        // -------------------------------------------------------------
+        function render() {
+            const W = canvas.width;
+            const H = canvas.height;
+
+            // 1. Clear Screen with Pure Black (invisible on physical wall)
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, W, H);
+
+            // 2. Draw Calibration Quad & Pins (Only in Calibration Mode)
+            if (isCalibrationMode) {
+                const pts = corners.map(c => ({ x: c.x * W, y: c.y * H }));
+
+                // Glowing Quad Border
+                ctx.save();
+                ctx.strokeStyle = '#00ffcc';
+                ctx.lineWidth = 2;
+                ctx.shadowColor = '#00ffcc';
+                ctx.shadowBlur = 12;
+                ctx.beginPath();
+                ctx.moveTo(pts[0].x, pts[0].y);
+                ctx.lineTo(pts[1].x, pts[1].y);
+                ctx.lineTo(pts[2].x, pts[2].y);
+                ctx.lineTo(pts[3].x, pts[3].y);
+                ctx.closePath();
+                ctx.stroke();
+
+                // Crosshair in Center
+                const center = mapWhiteboardToScreen(0.5, 0.5);
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(center.x - 20, center.y);
+                ctx.lineTo(center.x + 20, center.y);
+                ctx.moveTo(center.x, center.y - 20);
+                ctx.lineTo(center.x, center.y + 20);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.arc(center.x, center.y, 10, 0, Math.PI * 2);
+                ctx.stroke();
+
+                // 4 Corner Draggable Pins with High Visibility & Feedback
+                const pinLabels = ["TL (Pin 1)", "TR (Pin 2)", "BR (Pin 3)", "BL (Pin 4)"];
+                for (let i = 0; i < 4; i++) {
+                    const isSelected = (selectedHandleIndex === i);
+                    const isActive = (activeHandleIndex === i);
+                    const isHovered = (hoveredHandleIndex === i);
+
+                    // Outer Halo Ring
+                    ctx.beginPath();
+                    ctx.arc(pts[i].x, pts[i].y, HANDLE_RADIUS + (isActive ? 6 : isHovered ? 3 : 0), 0, Math.PI * 2);
+                    ctx.strokeStyle = isActive ? '#ffffff' : (isSelected ? '#ffea00' : '#00ffcc');
+                    ctx.lineWidth = isActive ? 3 : 2;
+                    ctx.shadowColor = isActive ? '#ffffff' : (isSelected ? '#ffea00' : '#00ffcc');
+                    ctx.shadowBlur = isActive ? 20 : 12;
+                    ctx.stroke();
+
+                    // Pin Disc Body
+                    ctx.beginPath();
+                    ctx.arc(pts[i].x, pts[i].y, HANDLE_RADIUS, 0, Math.PI * 2);
+                    ctx.fillStyle = isActive ? '#ffffff' : (isHovered ? '#33ffdd' : '#00ccaa');
+                    ctx.fill();
+
+                    // Center Bullseye Dot
+                    ctx.beginPath();
+                    ctx.arc(pts[i].x, pts[i].y, 6, 0, Math.PI * 2);
+                    ctx.fillStyle = '#000000';
+                    ctx.fill();
+
+                    // Check if Laptop Camera has locked onto this pin's ArUco marker
+                    const tagId = PIN_TO_MARKER[i];
+                    const isTagLocked = trackerStatus.markers.has(tagId);
+
+                    if (isTagLocked) {
+                        // Pulsing Emerald Lock-On Ring
+                        const pulse = 4 * Math.sin(Date.now() * 0.008);
+                        ctx.beginPath();
+                        ctx.arc(pts[i].x, pts[i].y, HANDLE_RADIUS + 10 + pulse, 0, Math.PI * 2);
+                        ctx.strokeStyle = '#00ff88';
+                        ctx.lineWidth = 2.5;
+                        ctx.shadowColor = '#00ff88';
+                        ctx.shadowBlur = 24;
+                        ctx.stroke();
+
+                        // Lock indicator tag
+                        ctx.fillStyle = '#00ff88';
+                        ctx.font = 'bold 10px Segoe UI';
+                        ctx.fillText(`✓ TAG ${tagId} LOCKED`, pts[i].x + 24, pts[i].y + 27);
+                    }
+                }
+                ctx.restore();
+            }
+
+            // 3. High-Visibility Whiteboard Tracker Status Banner (Projected in center)
+            if (trackerStatus.message && (Date.now() - trackerStatus.timestamp < 6500)) {
+                const center = mapWhiteboardToScreen(0.5, 0.5);
+                const age = Date.now() - trackerStatus.timestamp;
+                const alpha = (age > 5500) ? (6500 - age) / 1000 : 1.0;
+
+                ctx.save();
+                ctx.translate(center.x, center.y);
+                ctx.globalAlpha = alpha;
+
+                // Translucent Sci-Fi Background Box
+                const boxW = 460;
+                const boxH = 120;
+                ctx.fillStyle = 'rgba(5, 10, 20, 0.88)';
+                ctx.strokeStyle = (trackerStatus.state === 'LOCKED') ? '#00ff88' : '#00ffcc';
+                ctx.lineWidth = 2;
+                ctx.shadowColor = ctx.strokeStyle;
+                ctx.shadowBlur = 20;
+                ctx.beginPath();
+                ctx.roundRect(-boxW/2, -boxH/2, boxW, boxH, 12);
+                ctx.fill();
+                ctx.stroke();
+
+                // Top Header Badge
+                ctx.fillStyle = (trackerStatus.state === 'LOCKED') ? '#00ff88' : '#00ffcc';
+                ctx.font = 'bold 13px Segoe UI';
+                ctx.textAlign = 'center';
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = ctx.fillStyle;
+                const headerText = (trackerStatus.state === 'LOCKED') 
+                    ? "🎯 OPTICAL HOMOGRAPHY ENGINE: LOCKED & READY" 
+                    : "🟢 LAPTOP CAMERA TRACKER CONNECTED";
+                ctx.fillText(headerText, 0, -boxH/2 + 26);
+
+                // Big Main Message
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 17px Segoe UI';
+                ctx.shadowBlur = 6;
+                ctx.shadowColor = '#000000';
+                ctx.fillText(trackerStatus.message, 0, 5);
+
+                // 4 Marker Lock Badges
+                ctx.font = '11px monospace';
+                const tagLabels = [
+                    { id: 3, name: "TL (Tag 3)" },
+                    { id: 2, name: "TR (Tag 2)" },
+                    { id: 1, name: "BR (Tag 1)" },
+                    { id: 0, name: "BL (Tag 0)" }
+                ];
+                const startX = -170;
+                tagLabels.forEach((item, idx) => {
+                    const locked = trackerStatus.markers.has(item.id);
+                    ctx.fillStyle = locked ? '#00ff88' : 'rgba(255, 255, 255, 0.4)';
+                    ctx.fillText(`${item.name}: ${locked ? '✓' : '○'}`, startX + idx * 115, boxH/2 - 16);
+                });
+
+                ctx.restore();
+            }
+
+            // 4. Render Active Kinetic Shockwaves ("Visual Vibrations")
+            for (let i = ripples.length - 1; i >= 0; i--) {
+                const r = ripples[i];
+                r.radius += 5.5;
+                r.life -= 0.035;
+
+                if (r.life <= 0) {
+                    ripples.splice(i, 1);
+                    continue;
+                }
+
+                ctx.save();
+                // Outer Shockwave Ring
+                ctx.strokeStyle = r.color;
+                ctx.lineWidth = 4 * r.life;
+                ctx.shadowColor = r.color;
+                ctx.shadowBlur = 20 * r.life;
+                ctx.beginPath();
+                ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
+                ctx.stroke();
+
+                // Second Concentric Harmonic Ring
+                if (r.radius > 25) {
+                    ctx.lineWidth = 2 * r.life;
+                    ctx.beginPath();
+                    ctx.arc(r.x, r.y, r.radius * 0.65, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+
+                // Inner Solid Pop
+                if (r.radius < 50) {
+                    ctx.fillStyle = '#ffffff';
+                    ctx.beginPath();
+                    ctx.arc(r.x, r.y, 8 * r.life, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                // Impact Label
+                ctx.font = 'bold 18px Segoe UI';
+                ctx.fillStyle = `rgba(255, 255, 255, ${r.life})`;
+                ctx.textAlign = 'center';
+                ctx.fillText(r.label, r.x, r.y - r.radius - 12);
+
+                ctx.restore();
+            }
+
+            requestAnimationFrame(render);
+        }
+        requestAnimationFrame(render);
+
+        // -------------------------------------------------------------
+        // Real-Time Server-Sent Events (SSE) from Python Backend
+        // Zero external libraries: Native browser EventSource!
+        // -------------------------------------------------------------
+        function connectToServer() {
+            const sse = new EventSource('/events');
+
+            sse.onopen = () => {
+                connDot.classList.add('connected');
+                connText.innerText = "Connected to Python Engine";
+            };
+
+            sse.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.event === 'HIT') {
+                        // nx and ny are in normalized 0.0 to 1.0 range
+                        triggerImpact(data.nx, data.ny, `HIT #${data.hit_num || totalHits + 1}`);
+                    } else if (data.event === 'TRACKER_STATUS') {
+                        trackerStatus.message = data.message;
+                        trackerStatus.state = data.state;
+                        trackerStatus.timestamp = Date.now();
+                        trackerStatus.markers = new Set(data.markers || []);
+                        if (data.state === 'START' || data.state === 'LOCKED') {
+                            playBoingSound(); // auditory chime on connect / lock
+                        }
+                    }
+                } catch (err) {
+                    console.error("Error parsing event:", err);
+                }
+            };
+
+            sse.onerror = () => {
+                connDot.classList.remove('connected');
+                connText.innerText = "Waiting for Python Engine...";
+                sse.close();
+                setTimeout(connectToServer, 2000); // Reconnect loop
+            };
+        }
+
+        // Connect to server
+        connectToServer();
+    </script>
+</body>
+</html>
