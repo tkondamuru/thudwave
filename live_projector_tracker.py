@@ -56,6 +56,22 @@ def send_tracker_status(markers, is_locked):
             pass
     threading.Thread(target=_send, daemon=True).start()
 
+def order_points(pts):
+    """
+    Orders 4 spatial points in consistent clockwise order:
+    [0]: Top-Left, [1]: Top-Right, [2]: Bottom-Right, [3]: Bottom-Left
+    Does NOT depend on ArUco tag IDs. Works regardless of tag sticker placement!
+    """
+    rect = np.zeros((4, 2), dtype=np.float32)
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]      # Top-Left: smallest (x + y)
+    rect[2] = pts[np.argmax(s)]      # Bottom-Right: largest (x + y)
+
+    diff = np.diff(pts, axis=1)      # y - x
+    rect[1] = pts[np.argmin(diff)]   # Top-Right: smallest (y - x) == largest (x - y)
+    rect[3] = pts[np.argmax(diff)]   # Bottom-Left: largest (y - x) == smallest (x - y)
+    return rect
+
 def auto_detect_camera():
     """Probes available cameras and picks an active one."""
     print("[Camera] Auto-detecting camera...")
@@ -118,12 +134,16 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0):
                 is_locked = True
                 locked_board_tags = {k: board_tags[k] for k in [0, 1, 2, 3]}
 
-                xs = [locked_board_tags[k][0] for k in [0, 1, 2, 3]]
-                ys = [locked_board_tags[k][1] for k in [0, 1, 2, 3]]
-                board_min_x, board_max_x = min(xs), max(xs)
-                board_min_y, board_max_y = min(ys), max(ys)
+                # Automatically sort 4 physical points into: TL, TR, BR, BL
+                raw_pts = np.array([locked_board_tags[k] for k in [0, 1, 2, 3]], dtype=np.float32)
+                ordered_pts = order_points(raw_pts)
 
-                src_pts = np.float32([locked_board_tags[3], locked_board_tags[2], locked_board_tags[1], locked_board_tags[0]])
+                xs = ordered_pts[:, 0]
+                ys = ordered_pts[:, 1]
+                board_min_x, board_max_x = float(np.min(xs)), float(np.max(xs))
+                board_min_y, board_max_y = float(np.min(ys)), float(np.max(ys))
+
+                src_pts = ordered_pts
                 dst_pts = np.float32([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
                 H_matrix = cv2.getPerspectiveTransform(src_pts, dst_pts)
 
@@ -132,15 +152,16 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0):
                 print("\n" + "=" * 65)
                 print(" 🔒 [LOCKED] 4 Whiteboard Corners FROZEN in place!")
                 print("   • Sent lock update to browser! (Whiteboard LOCKED)")
-                print(f"   • TL(3): {locked_board_tags[3]}   TR(2): {locked_board_tags[2]}")
-                print(f"   • BL(0): {locked_board_tags[0]}   BR(1): {locked_board_tags[1]}")
+                print(f"   • Top-Left:     ({int(ordered_pts[0][0])}, {int(ordered_pts[0][1])})")
+                print(f"   • Top-Right:    ({int(ordered_pts[1][0])}, {int(ordered_pts[1][1])})")
+                print(f"   • Bottom-Right: ({int(ordered_pts[2][0])}, {int(ordered_pts[2][1])})")
+                print(f"   • Bottom-Left:  ({int(ordered_pts[3][0])}, {int(ordered_pts[3][1])})")
                 print("   • ArUco scanning is PAUSED (Zero jitter).")
                 print("   • Ball rebound tracking is ACTIVE. Ready to throw ball!")
                 print("   • Press [L] again to unlock if you move the camera/laptop.")
                 print("=" * 65 + "\n")
             else:
-                tag_names = {3: "Top-Left (Tag 3)", 2: "Top-Right (Tag 2)", 1: "Bottom-Right (Tag 1)", 0: "Bottom-Left (Tag 0)"}
-                missing_names = [tag_names[m] for m in missing_ids]
+                missing_names = [f"Tag {m}" for m in missing_ids]
                 found_count = 4 - len(missing_ids)
 
                 print("\n" + "!" * 65)
@@ -248,8 +269,7 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0):
                     last_broadcast_keys = current_keys
                     last_broadcast_time = now
 
-                    tag_names = {3: "TL(3)", 2: "TR(2)", 1: "BR(1)", 0: "BL(0)"}
-                    found_names = [tag_names[k] for k in sorted(board_tags.keys(), reverse=True)]
+                    found_names = [f"Tag {k}" for k in sorted(board_tags.keys())]
                     if len(board_tags) == 4:
                         status_str = "🎯 [4/4 IDENTIFIED] All 4 corners in view! Press [L] on terminal to lock."
                     else:
@@ -312,12 +332,14 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0):
 
                     # Draw boundary quad
                     if len(active_tags) == 4 and all(k in active_tags for k in [0, 1, 2, 3]):
-                        poly = np.array([active_tags[3], active_tags[2], active_tags[1], active_tags[0]], dtype=np.int32)
+                        pts = np.array([active_tags[k] for k in [0, 1, 2, 3]], dtype=np.float32)
+                        ordered = order_points(pts).astype(np.int32)
+                        poly = ordered.reshape((-1, 1, 2))
                         border_color = (0, 255, 128) if is_locked else (0, 220, 255)
                         cv2.polylines(frame, [poly], True, border_color, 2)
                         label = "🔒 LOCKED (READY TO THROW BALL)" if is_locked else "4/4 IDENTIFIED - PRESS [L] TO LOCK"
                         cv2.putText(frame, label,
-                                    (active_tags[3][0], max(20, active_tags[3][1] - 10)),
+                                    (int(ordered[0][0]), max(20, int(ordered[0][1]) - 10)),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, border_color, 1, cv2.LINE_AA)
 
                     # Draw markers
@@ -325,8 +347,7 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0):
                         cx, cy = int(pt[0]), int(pt[1])
                         pt_color = (0, 255, 128) if is_locked else (0, 220, 255)
                         cv2.circle(frame, (cx, cy), 6, pt_color, -1)
-                        tag_name = {3: "TL(3)", 2: "TR(2)", 1: "BR(1)", 0: "BL(0)"}.get(m_id, str(m_id))
-                        cv2.putText(frame, tag_name, (cx - 15, cy - 12),
+                        cv2.putText(frame, f"Tag {m_id}", (cx - 15, cy - 12),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, pt_color, 1, cv2.LINE_AA)
 
                     # Draw tracked ball
