@@ -4,7 +4,7 @@ Provides:
 1. Static web game hosting (HTML5 Canvas & Web Audio) from /web.
 2. Real-time Server-Sent Events (SSE) on /events for zero-latency ball impacts.
 3. Whiteboard 4-pin corner calibration persistence (/calibration) to projector_calibration.json.
-4. Camera tracker status broadcast (/tracker_status) to show live tag lock on projector.
+4. Camera tracker status broadcast (/tracker_status) to show identified markers on projector.
 
 Zero external dependencies - 100% Python 3 Standard Library!
 """
@@ -38,14 +38,6 @@ CALIBRATION_FILE = os.path.join(BASE_DIR, 'projector_calibration.json')
 client_queues = []
 clients_lock = threading.Lock()
 shutdown_event = threading.Event()
-
-# Lock state synchronization between Tracker and Browser
-lock_state = {
-    "locked": False,
-    "request_toggle": False,
-    "last_message": "Ready to detect markers."
-}
-lock_mutex = threading.Lock()
 
 class ProjectorServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
@@ -138,77 +130,20 @@ class ProjectorHTTPHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"status": "ok"}')
 
-        elif self.path.startswith('/request_lock_toggle'):
-            # Triggered when user presses [L] on the projector browser
-            with lock_mutex:
-                lock_state["request_toggle"] = True
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(b'{"status": "toggle_requested"}')
-
-        elif self.path.startswith('/check_lock_request'):
-            # Polled by live_projector_tracker.py
-            with lock_mutex:
-                req = lock_state["request_toggle"]
-                lock_state["request_toggle"] = False
-                cur_locked = lock_state["locked"]
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps({"toggle_requested": req, "locked": cur_locked}).encode('utf-8'))
-
-        elif self.path.startswith('/set_lock_state'):
-            # Called by live_projector_tracker.py when corners are locked or unlocked
-            from urllib.parse import urlparse, parse_qs
-            query = parse_qs(urlparse(self.path).query)
-            is_locked = query.get('locked', ['0'])[0] in ['1', 'true', 'True']
-            is_failed = query.get('failed', ['0'])[0] in ['1', 'true', 'True']
-            msg = query.get('msg', [''])[0]
-            with lock_mutex:
-                lock_state["locked"] = is_locked
-                lock_state["last_message"] = msg
-            # Broadcast to browser canvas via SSE
-            event = {
-                "event": "LOCK_STATE",
-                "locked": is_locked,
-                "failed": is_failed,
-                "message": msg,
-                "timestamp_ms": int(time.time() * 1000)
-            }
-            with clients_lock:
-                for q in client_queues:
-                    q.put(event)
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(b'{"status": "ok"}')
-
-        elif self.path == '/lock_state':
-            with lock_mutex:
-                payload = json.dumps(lock_state).encode('utf-8')
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(payload)
-
         elif self.path.startswith('/tracker_status'):
-            # Broadcast ArUco lock status from Python tracker to projector canvas
+            # Broadcast ArUco identification status from Python tracker to browser
             from urllib.parse import urlparse, parse_qs
             query = parse_qs(urlparse(self.path).query)
-            msg = query.get('msg', [''])[0]
-            state = query.get('state', ['INFO'])[0]
             markers_str = query.get('markers', [''])[0]
+            is_locked = query.get('locked', ['0'])[0] in ['1', 'true', 'True']
             markers = [int(m) for m in markers_str.split(',') if m.strip().isdigit()]
+            msg = query.get('msg', [''])[0]
             event = {
                 "event": "TRACKER_STATUS",
+                "markers": sorted(markers),
+                "count": len(markers),
+                "locked": is_locked,
                 "message": msg,
-                "state": state,
-                "markers": markers,
                 "timestamp_ms": int(time.time() * 1000)
             }
             with clients_lock:
@@ -283,31 +218,9 @@ def start_projector_server(port=PORT):
     print(f" • Projector Display URL: http://localhost:{port}")
     print(f" • Calibration Config:   {CALIBRATION_FILE}")
     print(f" • Static Web Directory:  {WEB_DIR}")
-    print("\n👉 Drag your browser window onto the Magcubic Projector screen")
-    print("   and open: http://localhost:8000")
-    print(" • Console Commands: Type 'L' + Enter to Lock/Unlock Whiteboard Corners")
-    print("                    Type 'T' + Enter to send a Test Hit")
+    print("\n👉 Open in browser on Magcubic Projector: http://localhost:8000")
+    print("   Press [C] on canvas anytime to toggle Calibration / Game Mode")
     print("=" * 60 + "\n")
-
-    def listen_server_console():
-        while not shutdown_event.is_set():
-            try:
-                line = sys.stdin.readline()
-                if not line:
-                    break
-                cmd = line.strip().lower()
-                if cmd == 'l':
-                    with lock_mutex:
-                        lock_state["request_toggle"] = True
-                    print("  [Server Console] 🔒 Manual Lock [L] toggled! Signaled tracker...")
-                elif cmd == 't':
-                    broadcast_hit(0.5, 0.5, 999)
-                    print("  [Server Console] 💥 Test hit broadcasted to projector.")
-            except Exception:
-                break
-
-    console_thread = threading.Thread(target=listen_server_console, daemon=True)
-    console_thread.start()
 
     try:
         server.serve_forever()
