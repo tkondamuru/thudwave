@@ -91,7 +91,7 @@ def auto_detect_camera():
     print("  Defaulting to Camera [0]\n")
     return 0
 
-def run_tracker(camera_index=None, show_gui=True, rotation=0):
+def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
     if camera_index is None:
         camera_index = auto_detect_camera()
 
@@ -118,6 +118,9 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0):
     board_min_y, board_max_y = 0, 1000
 
     flight_history = []
+    ball_trail = []
+    active_splash = None
+    video_writer = None
     cooldown_frames = 0
     hit_counter = 0
     quit_requested = False
@@ -246,6 +249,11 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0):
             h, w = frame.shape[:2]
             frame_idx += 1
 
+            if record_file and video_writer is None:
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                video_writer = cv2.VideoWriter(record_file, fourcc, 60.0, (w, h))
+                print(f"\n🎥 [Recording] Output video will be saved to: {record_file}\n")
+
             if frame_idx % 30 == 0:
                 elapsed = time.time() - fps_start_time
                 fps_display = 30.0 / elapsed if elapsed > 0 else 60.0
@@ -290,8 +298,11 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0):
                 if meas is not None:
                     mx, my = meas
                     flight_history.append((frame_idx, mx, my))
+                    ball_trail.append((int(mx), int(my)))
                     if len(flight_history) > 18:
                         flight_history.pop(0)
+                    if len(ball_trail) > 35:
+                        ball_trail.pop(0)
 
                     # Rebound trajectory calculation (tuned for 60 FPS)
                     if len(flight_history) >= 5 and cooldown_frames == 0:
@@ -306,7 +317,6 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0):
                                 v_out = np.hypot(x_after - xp, y_after - yp)
 
                                 # Velocity thresholds adapted for 60 FPS:
-                                # Rebounds move ~15-20 px/frame at 60 FPS
                                 if v_in >= 15.0 and v_out >= 10.0:
                                     hit_counter += 1
                                     cooldown_frames = 35
@@ -315,65 +325,99 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0):
                                     # Perspective transform using FROZEN H_matrix
                                     pt = np.array([[[xp, yp]]], dtype=np.float32)
                                     trans = cv2.perspectiveTransform(pt, H_matrix)[0, 0]
-                                    nx = max(0.0, min(1.0, float(trans[0])))
-                                    ny = max(0.0, min(1.0, float(trans[1])))
+                                    raw_nx, raw_ny = float(trans[0]), float(trans[1])
+                                    nx = max(0.0, min(1.0, raw_nx))
+                                    ny = max(0.0, min(1.0, raw_ny))
 
-                                    print(f"\n💥 [IMPACT #{hit_counter}] Rebound at X={nx:.3f}, Y={ny:.3f} (Speed={v_in:.0f}px/f) -> Broadcasted to Projector!")
+                                    active_splash = {'pt': (int(xp), int(yp)), 'nx': nx, 'ny': ny, 'frames': 45}
+
+                                    print(f"\n💥 [IMPACT #{hit_counter}]")
+                                    print(f"   • Raw Camera Pixel:   ({xp:.0f}, {yp:.0f})")
+                                    print(f"   • Transform Output:   Raw X={raw_nx:.3f}, Raw Y={raw_ny:.3f}")
+                                    print(f"   • Normalized Sent:    X={nx:.3f}, Y={ny:.3f} -> Projector Server")
+                                    print(f"   • Board Bounding Box: X=[{int(board_min_x)}, {int(board_max_x)}], Y=[{int(board_min_y)}, {int(board_max_y)}]\n")
                                     send_hit_to_projector(nx, ny, hit_counter)
                                     break
                 else:
                     if len(flight_history) > 0 and (frame_idx - flight_history[-1][0] > 10):
                         flight_history.clear()
+                    if len(ball_trail) > 0:
+                        ball_trail.pop(0)
 
-            # 3. OpenCV GUI Window Rendering
+            # 3. Visual Annotations (Trail, Splash, Markers, Quad)
+            active_tags = locked_board_tags if is_locked else board_tags
+
+            # Draw boundary quad
+            if len(active_tags) == 4 and all(k in active_tags for k in [0, 1, 2, 3]):
+                pts = np.array([active_tags[k] for k in [0, 1, 2, 3]], dtype=np.float32)
+                ordered = order_points(pts).astype(np.int32)
+                poly = ordered.reshape((-1, 1, 2))
+                border_color = (0, 255, 128) if is_locked else (0, 220, 255)
+                cv2.polylines(frame, [poly], True, border_color, 2)
+                label = "🔒 LOCKED (READY TO THROW BALL)" if is_locked else "4/4 IDENTIFIED - PRESS [L] TO LOCK"
+                cv2.putText(frame, label,
+                            (int(ordered[0][0]), max(20, int(ordered[0][1]) - 10)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, border_color, 1, cv2.LINE_AA)
+
+            # Draw markers
+            for m_id, pt in active_tags.items():
+                cx, cy = int(pt[0]), int(pt[1])
+                pt_color = (0, 255, 128) if is_locked else (0, 220, 255)
+                cv2.circle(frame, (cx, cy), 6, pt_color, -1)
+                cv2.putText(frame, f"Tag {m_id}", (cx - 15, cy - 12),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, pt_color, 1, cv2.LINE_AA)
+
+            if is_locked:
+                # Draw ball motion trail (yellow fading line)
+                for i in range(1, len(ball_trail)):
+                    thick = max(1, int(i / 6))
+                    cv2.line(frame, ball_trail[i - 1], ball_trail[i], (0, 255, 255), thick)
+
+                # Draw impact splash (expanding red bullseye)
+                if active_splash and active_splash['frames'] > 0:
+                    s_pt = active_splash['pt']
+                    radius = max(6, (46 - active_splash['frames']) * 2)
+                    cv2.circle(frame, s_pt, radius, (0, 0, 255), 3)
+                    cv2.circle(frame, s_pt, 4, (0, 0, 255), -1)
+                    cv2.putText(frame, f"HIT! Cam:{s_pt} -> ({active_splash['nx']:.2f}, {active_splash['ny']:.2f})",
+                                (max(10, s_pt[0] - 100), max(30, s_pt[1] - 20)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2, cv2.LINE_AA)
+                    active_splash['frames'] -= 1
+
+            # Draw tracked ball
+            if state is not None:
+                bx, by, _, _ = state
+                cv2.circle(frame, (int(bx), int(by)), 12, (0, 255, 0), 2)
+                if meas is not None:
+                    cv2.circle(frame, (int(meas[0]), int(meas[1])), 4, (0, 255, 0), -1)
+
+            # Top HUD bar
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (0, 0), (w, 52), (15, 15, 20), -1)
+            cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
+
+            if is_locked:
+                st_text = "🔒 LOCKED (PRESS [L] TO UNLOCK)"
+                st_col = (0, 255, 128)
+            elif len(board_tags) == 4:
+                st_text = "🎯 4/4 IDENTIFIED: PRESS [L] TO LOCK"
+                st_col = (0, 255, 255)
+            else:
+                st_text = f"SEARCHING: {len(board_tags)}/4 IDENTIFIED (PRESS [L] WHEN 4/4)"
+                st_col = (0, 200, 255) if len(board_tags) > 0 else (80, 80, 255)
+
+            rec_indicator = " [REC 🔴]" if video_writer else ""
+            cv2.putText(frame, st_text + rec_indicator, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.52, st_col, 2, cv2.LINE_AA)
+            metrics = f"{w}x{h} | {fps_display:.0f}FPS | Hits: {hit_counter} | [L] Lock | [Q] Quit"
+            cv2.putText(frame, metrics, (max(12, w - 420), 22), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (220, 220, 220), 1, cv2.LINE_AA)
+
+            # Write frame to video if recording
+            if video_writer is not None:
+                video_writer.write(frame)
+
+            # 4. OpenCV GUI Window Rendering
             if gui_available:
                 try:
-                    active_tags = locked_board_tags if is_locked else board_tags
-
-                    # Draw boundary quad
-                    if len(active_tags) == 4 and all(k in active_tags for k in [0, 1, 2, 3]):
-                        pts = np.array([active_tags[k] for k in [0, 1, 2, 3]], dtype=np.float32)
-                        ordered = order_points(pts).astype(np.int32)
-                        poly = ordered.reshape((-1, 1, 2))
-                        border_color = (0, 255, 128) if is_locked else (0, 220, 255)
-                        cv2.polylines(frame, [poly], True, border_color, 2)
-                        label = "🔒 LOCKED (READY TO THROW BALL)" if is_locked else "4/4 IDENTIFIED - PRESS [L] TO LOCK"
-                        cv2.putText(frame, label,
-                                    (int(ordered[0][0]), max(20, int(ordered[0][1]) - 10)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, border_color, 1, cv2.LINE_AA)
-
-                    # Draw markers
-                    for m_id, pt in active_tags.items():
-                        cx, cy = int(pt[0]), int(pt[1])
-                        pt_color = (0, 255, 128) if is_locked else (0, 220, 255)
-                        cv2.circle(frame, (cx, cy), 6, pt_color, -1)
-                        cv2.putText(frame, f"Tag {m_id}", (cx - 15, cy - 12),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, pt_color, 1, cv2.LINE_AA)
-
-                    # Draw tracked ball
-                    if state is not None:
-                        bx, by, _, _ = state
-                        cv2.circle(frame, (int(bx), int(by)), 12, (0, 255, 0), 2)
-
-                    # Top HUD bar
-                    overlay = frame.copy()
-                    cv2.rectangle(overlay, (0, 0), (w, 52), (15, 15, 20), -1)
-                    cv2.addWeighted(overlay, 0.85, frame, 0.15, 0, frame)
-
-                    if is_locked:
-                        st_text = "🔒 LOCKED (PRESS [L] TO UNLOCK)"
-                        st_col = (0, 255, 128)
-                    elif len(board_tags) == 4:
-                        st_text = "🎯 4/4 IDENTIFIED: PRESS [L] TO LOCK"
-                        st_col = (0, 255, 255)
-                    else:
-                        st_text = f"SEARCHING: {len(board_tags)}/4 IDENTIFIED (PRESS [L] WHEN 4/4)"
-                        st_col = (0, 200, 255) if len(board_tags) > 0 else (80, 80, 255)
-
-                    cv2.putText(frame, st_text, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.52, st_col, 2, cv2.LINE_AA)
-                    metrics = f"{w}x{h} | {fps_display:.0f}FPS | Hits: {hit_counter} | [L] Lock | [Q] Quit"
-                    cv2.putText(frame, metrics, (max(12, w - 420), 22), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (220, 220, 220), 1, cv2.LINE_AA)
-
                     cv2.imshow(window_name, frame)
                     key = cv2.waitKey(1) & 0xFF
                     if key in [ord('q'), ord('Q')]:
@@ -390,6 +434,9 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0):
         print("\nStopping tracker...")
     finally:
         cap.release()
+        if video_writer is not None:
+            video_writer.release()
+            print(f"🎬 Video recording saved successfully to: {record_file}")
         if gui_available:
             try:
                 cv2.destroyAllWindows()
@@ -402,6 +449,9 @@ if __name__ == '__main__':
     parser.add_argument("--camera", type=int, default=None, help="Camera index (default: auto-detect)")
     parser.add_argument("--no-gui", action="store_true", help="Pure console mode without preview window")
     parser.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270], help="Rotate frame (degrees)")
+    parser.add_argument("--record", type=str, default=None, help="Save annotated tracking video to MP4 file")
+    parser.add_argument("--output", type=str, default=None, help="Alias for --record")
     args = parser.parse_args()
 
-    run_tracker(camera_index=args.camera, show_gui=not args.no_gui, rotation=args.rotate)
+    record_target = args.record or args.output
+    run_tracker(camera_index=args.camera, show_gui=not args.no_gui, rotation=args.rotate, record_file=record_target)
