@@ -375,14 +375,13 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
                                     send_hit_to_projector(nx, ny, hit_counter)
                                     break
                 else:
-                    # Ball is not detected (user picking up ball or ball at rest)
-                    # Clean slate reset: ready for the next throw immediately!
-                    if len(flight_history) > 0:
+                    # When ball is absent for > 15 frames (e.g. retrieving ball from floor), clear buffers
+                    if len(flight_history) > 0 and (frame_idx - flight_history[-1][0] > 15):
                         flight_history.clear()
                         tracker.reset()
-                        detector.reset()
-                    if len(ball_trail) > 0:
                         ball_trail.clear()
+                    elif len(ball_trail) > 0:
+                        ball_trail.pop(0)
 
             # 3. Visual Annotations (Trail, Splash, Markers, Quad)
             active_tags = locked_board_tags if is_locked else board_tags

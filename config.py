@@ -10,10 +10,10 @@ UPPER_ORANGE = np.array([18, 255, 255], dtype=np.uint8)
 LOWER_COLOR = LOWER_ORANGE
 UPPER_COLOR = UPPER_ORANGE
 
-# Contour Geometry Filtering (Tuned for ball shape, strictly rejects hands & arms)
-MIN_BALL_AREA = 100        # Min pixel area for ball blob (rejects noise specks)
-MAX_BALL_AREA = 2500       # Max pixel area for ball blob (strictly rejects hands, arms, body)
-MIN_CIRCULARITY = 0.58     # Ball is round (0.75-1.0), whereas hands and fingers are < 0.50
+# Contour Geometry Filtering
+MIN_BALL_AREA = 80        # Min pixel area for ball blob (rejects noise specks)
+MAX_BALL_AREA = 8000      # Max pixel area for ball blob (filters large desk/box shapes)
+MIN_CIRCULARITY = 0.35    # 4 * pi * Area / Perimeter^2 (1.0 is perfect circle)
 
 # Kalman Filter Parameters
 PROCESS_NOISE_COV = 1e-2  # Process noise covariance (Q)
