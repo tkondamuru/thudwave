@@ -1,52 +1,67 @@
 """
-Interactive Whiteboard Projector Server (macOS Edition)
+Interactive Whiteboard Projector Server
 Provides:
 1. Static web game hosting (HTML5 Canvas & Web Audio) from /web.
-2. Real-time Server-Sent Events (SSE) on /events for zero-latency ball impacts.
-3. Whiteboard 4-pin corner calibration persistence (/calibration) to projector_calibration.json.
-4. Camera tracker status broadcast (/tracker_status) to show identified markers on projector.
+2. Real-time Server-Sent Events (SSE) on /events for ball impacts & lock state.
+3. Ball impact receiver on /hit.
+4. Tracker lock state receiver on /tracker_status (or /lock).
+5. Whiteboard 4-pin corner calibration persistence on /calibration.
 
 Zero external dependencies - 100% Python 3 Standard Library!
 """
 
 import http.server
-import socketserver
-import threading
 import json
-import time
 import os
-import sys
 import queue
-
-try:
-    from queue import Empty
-except ImportError:
-    class Empty(Exception): pass
-
-try:
-    import _queue
-    _Empty = _queue.Empty
-except Exception:
-    _Empty = Empty
+import sys
+import threading
+import time
+from urllib.parse import parse_qs, urlparse
 
 PORT = 8000
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE_DIR, 'web')
 CALIBRATION_FILE = os.path.join(BASE_DIR, 'projector_calibration.json')
 
-# Thread-safe queue of connected SSE clients (browser canvas)
+# Thread-safe SSE client connections
 client_queues = []
 clients_lock = threading.Lock()
 shutdown_event = threading.Event()
 
-latest_tracker_status = {
-    "event": "TRACKER_STATUS",
-    "markers": [],
-    "count": 0,
-    "locked": False,
-    "message": "Searching..."
-}
-tracker_status_lock = threading.Lock()
+# Tracker lock state (manual [L] toggle in tracker)
+is_locked = False
+lock_state_lock = threading.Lock()
+
+
+def broadcast_hit(nx, ny, hit_num=None):
+    """Broadcasts a physical ball impact to all connected projector browsers."""
+    event = {
+        "event": "HIT",
+        "nx": max(0.0, min(1.0, float(nx))),
+        "ny": max(0.0, min(1.0, float(ny))),
+        "hit_num": hit_num,
+        "timestamp_ms": int(time.time() * 1000)
+    }
+    with clients_lock:
+        for q in client_queues:
+            q.put(event)
+
+
+def broadcast_lock(locked):
+    """Broadcasts whiteboard lock state (True/False) to all connected browsers."""
+    global is_locked
+    with lock_state_lock:
+        is_locked = locked
+    event = {
+        "event": "TRACKER_STATUS",
+        "locked": locked,
+        "timestamp_ms": int(time.time() * 1000)
+    }
+    with clients_lock:
+        for q in client_queues:
+            q.put(event)
+
 
 class ProjectorServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
@@ -57,16 +72,17 @@ class ProjectorServer(http.server.ThreadingHTTPServer):
             return
         super().handle_error(request, client_address)
 
+
 class ProjectorHTTPHandler(http.server.SimpleHTTPRequestHandler):
-    """
-    Lightweight HTTP & SSE server for macOS.
-    Serves static canvas game from /web and broadcasts impact events over /events.
-    """
+    """Lightweight HTTP & SSE handler for projector canvas game."""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=WEB_DIR, **kwargs)
 
     def do_GET(self):
-        if self.path == '/events':
+        url = urlparse(self.path)
+
+        if url.path == '/events':
             # Server-Sent Events (SSE) Stream
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')
@@ -79,33 +95,27 @@ class ProjectorHTTPHandler(http.server.SimpleHTTPRequestHandler):
             with clients_lock:
                 client_queues.append(q)
 
-            last_ping = time.time()
             try:
-                # Send initial connection event AND current tracker status immediately
+                # Send initial connection handshake and current lock state
                 self.wfile.write(b"data: {\"event\": \"CONNECTED\"}\n\n")
-                with tracker_status_lock:
-                    initial_status = f"data: {json.dumps(latest_tracker_status)}\n\n".encode('utf-8')
-                self.wfile.write(initial_status)
+                with lock_state_lock:
+                    status_json = json.dumps({"event": "TRACKER_STATUS", "locked": is_locked})
+                self.wfile.write(f"data: {status_json}\n\n".encode('utf-8'))
                 self.wfile.flush()
 
+                last_ping = time.time()
                 while not shutdown_event.is_set():
                     try:
                         msg = q.get(timeout=0.5)
                         if msg is None:
                             break
-                        payload = f"data: {json.dumps(msg)}\n\n".encode('utf-8')
-                        self.wfile.write(payload)
+                        self.wfile.write(f"data: {json.dumps(msg)}\n\n".encode('utf-8'))
                         self.wfile.flush()
-                    except (Empty, _Empty, queue.Empty):
-                        if shutdown_event.is_set():
-                            break
-                        now = time.time()
-                        if now - last_ping >= 10.0:
-                            last_ping = now
+                    except queue.Empty:
+                        if time.time() - last_ping >= 10.0:
+                            last_ping = time.time()
                             self.wfile.write(b": ping\n\n")
                             self.wfile.flush()
-                    except Exception:
-                        break
             except Exception:
                 pass
             finally:
@@ -113,90 +123,57 @@ class ProjectorHTTPHandler(http.server.SimpleHTTPRequestHandler):
                     if q in client_queues:
                         client_queues.remove(q)
 
-        elif self.path == '/calibration':
-            # Returns saved 4-corner pin calibration
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
+        elif url.path == '/hit':
+            # Trigger hit: /hit?x=0.45&y=0.60&num=1
+            params = parse_qs(url.query)
+            nx = float(params.get('x', [0.5])[0])
+            ny = float(params.get('y', [0.5])[0])
+            hit_num = int(params.get('num', [1])[0]) if 'num' in params else None
+            broadcast_hit(nx, ny, hit_num)
+            self._send_json({"status": "ok"})
+
+        elif url.path in ['/tracker_status', '/lock']:
+            # Toggle lock state: /tracker_status?locked=1 or /lock?locked=1
+            params = parse_qs(url.query)
+            locked = params.get('locked', ['0'])[0] in ['1', 'true', 'True']
+            broadcast_lock(locked)
+            self._send_json({"status": "ok", "locked": locked})
+
+        elif url.path == '/calibration':
+            # Retrieve saved 4-pin corner coordinates
             if os.path.exists(CALIBRATION_FILE):
                 try:
                     with open(CALIBRATION_FILE, 'rb') as f:
-                        self.wfile.write(f.read())
+                        data = f.read()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(data)
                     return
                 except Exception:
                     pass
-            self.wfile.write(b'{"corners": null}')
-
-        elif self.path.startswith('/hit'):
-            # Trigger hit event via HTTP GET /hit?x=0.45&y=0.60&num=1
-            from urllib.parse import urlparse, parse_qs
-            query = parse_qs(urlparse(self.path).query)
-            nx = float(query.get('x', [0.5])[0])
-            ny = float(query.get('y', [0.5])[0])
-            hit_num = int(query.get('num', [1])[0]) if 'num' in query else None
-            broadcast_hit(nx, ny, hit_num)
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(b'{"status": "ok"}')
-
-        elif self.path.startswith('/tracker_status'):
-            # Broadcast ArUco identification status from Python tracker to browser
-            from urllib.parse import urlparse, parse_qs
-            query = parse_qs(urlparse(self.path).query)
-            markers_str = query.get('markers', [None])[0]
-            is_locked = query.get('locked', ['0'])[0] in ['1', 'true', 'True']
-            msg = query.get('msg', [''])[0]
-
-            global latest_tracker_status
-            with tracker_status_lock:
-                if markers_str is not None:
-                    markers = [int(m) for m in markers_str.split(',') if m.strip().isdigit()]
-                    latest_tracker_status = {
-                        "event": "TRACKER_STATUS",
-                        "markers": sorted(markers),
-                        "count": len(markers),
-                        "locked": is_locked,
-                        "message": msg,
-                        "timestamp_ms": int(time.time() * 1000)
-                    }
-                    with clients_lock:
-                        for q in client_queues:
-                            q.put(latest_tracker_status)
-                body = json.dumps(latest_tracker_status).encode('utf-8')
-
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_json({"corners": None})
 
         else:
-            # Serve index.html or other static files from /web
+            # Serve index.html or other static assets from /web
             super().do_GET()
 
     def do_POST(self):
         if self.path == '/calibration':
-            # Save 4-corner pin calibration to projector_calibration.json
+            # Save 4-pin corner coordinates
             length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(length)
             try:
                 data = json.loads(body.decode('utf-8'))
                 with open(CALIBRATION_FILE, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2)
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(b'{"status": "saved"}')
+                self._send_json({"status": "saved"})
                 print("  [Calibration] Saved pin positions to projector_calibration.json")
-                return
             except Exception:
                 self.send_response(400)
                 self.end_headers()
-                return
+            return
         self.send_response(404)
         self.end_headers()
 
@@ -207,31 +184,24 @@ class ProjectorHTTPHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
 
+    def _send_json(self, obj):
+        data = json.dumps(obj).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(data)
+
     def log_message(self, format, *args):
-        # Silence routine HTTP requests
+        # Silence routine HTTP access logs
         return
 
-def broadcast_hit(nx, ny, hit_num=None):
-    """
-    Broadcasts a physical ball impact to all connected projector browsers.
-    Coordinates (nx, ny) are normalized [0.0 to 1.0] relative to whiteboard bounds.
-    """
-    event = {
-        "event": "HIT",
-        "nx": max(0.0, min(1.0, float(nx))),
-        "ny": max(0.0, min(1.0, float(ny))),
-        "hit_num": hit_num,
-        "timestamp_ms": int(time.time() * 1000)
-    }
-    with clients_lock:
-        for q in client_queues:
-            q.put(event)
 
 def start_projector_server(port=PORT):
     server = ProjectorServer(('0.0.0.0', port), ProjectorHTTPHandler)
 
     print("\n" + "=" * 60)
-    print(" 📽️  INTERACTIVE WHITEBOARD PROJECTOR SERVER (macOS)")
+    print(" 📽️  INTERACTIVE WHITEBOARD PROJECTOR SERVER")
     print("=" * 60)
     print(f" • Projector Display URL: http://localhost:{port}")
     print(f" • Calibration Config:   {CALIBRATION_FILE}")
@@ -251,6 +221,7 @@ def start_projector_server(port=PORT):
                 q.put(None)
         server.server_close()
         print("Projector server stopped cleanly.")
+
 
 if __name__ == '__main__':
     port = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else PORT

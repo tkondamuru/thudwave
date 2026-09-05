@@ -86,7 +86,7 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0):
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    cap.set(cv2.CAP_PROP_FPS, 30)
+    cap.set(cv2.CAP_PROP_FPS, 60)
 
     detector = GreenBallDetector()
     tracker = BallKalmanTracker()
@@ -225,9 +225,9 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0):
             h, w = frame.shape[:2]
             frame_idx += 1
 
-            if frame_idx % 15 == 0:
+            if frame_idx % 30 == 0:
                 elapsed = time.time() - fps_start_time
-                fps_display = 15.0 / elapsed if elapsed > 0 else 30.0
+                fps_display = 30.0 / elapsed if elapsed > 0 else 60.0
                 fps_start_time = time.time()
 
             # 1. ArUco Marker Scanning
@@ -270,12 +270,12 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0):
                 if meas is not None:
                     mx, my = meas
                     flight_history.append((frame_idx, mx, my))
-                    if len(flight_history) > 10:
+                    if len(flight_history) > 18:
                         flight_history.pop(0)
 
-                    # Rebound trajectory calculation
-                    if len(flight_history) >= 4 and cooldown_frames == 0:
-                        for idx in [-2, -3]:
+                    # Rebound trajectory calculation (tuned for 60 FPS)
+                    if len(flight_history) >= 5 and cooldown_frames == 0:
+                        for idx in [-2, -3, -4]:
                             if abs(idx) >= len(flight_history):
                                 continue
                             fp, xp, yp = flight_history[idx]
@@ -285,10 +285,11 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0):
                                 v_in = np.hypot(xp - x_before, yp - y_before)
                                 v_out = np.hypot(x_after - xp, y_after - yp)
 
-                                # Require real thrown ball speed (v >= 25 px/frame)
-                                if v_in >= 25.0 and v_out >= 15.0:
+                                # Velocity thresholds adapted for 60 FPS:
+                                # Rebounds move ~15-20 px/frame at 60 FPS
+                                if v_in >= 15.0 and v_out >= 10.0:
                                     hit_counter += 1
-                                    cooldown_frames = 20
+                                    cooldown_frames = 35
                                     flight_history.clear()
 
                                     # Perspective transform using FROZEN H_matrix
@@ -297,11 +298,11 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0):
                                     nx = max(0.0, min(1.0, float(trans[0])))
                                     ny = max(0.0, min(1.0, float(trans[1])))
 
-                                    print(f"\n💥 [IMPACT #{hit_counter}] Rebound at X={nx:.3f}, Y={ny:.3f} -> Broadcasted to Projector!")
+                                    print(f"\n💥 [IMPACT #{hit_counter}] Rebound at X={nx:.3f}, Y={ny:.3f} (Speed={v_in:.0f}px/f) -> Broadcasted to Projector!")
                                     send_hit_to_projector(nx, ny, hit_counter)
                                     break
                 else:
-                    if len(flight_history) > 0 and (frame_idx - flight_history[-1][0] > 6):
+                    if len(flight_history) > 0 and (frame_idx - flight_history[-1][0] > 10):
                         flight_history.clear()
 
             # 3. OpenCV GUI Window Rendering
