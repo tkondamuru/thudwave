@@ -116,6 +116,7 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
 
     board_min_x, board_max_x = 0, 1000
     board_min_y, board_max_y = 0, 1000
+    board_quad = None
 
     flight_history = []
     ball_trail = []
@@ -126,7 +127,7 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
     quit_requested = False
 
     def toggle_lock():
-        nonlocal is_locked, locked_board_tags, H_matrix
+        nonlocal is_locked, locked_board_tags, H_matrix, board_quad
         nonlocal board_min_x, board_max_x, board_min_y, board_max_y
 
         if not is_locked:
@@ -140,6 +141,7 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
                 # Automatically sort 4 physical points into: TL, TR, BR, BL
                 raw_pts = np.array([locked_board_tags[k] for k in [0, 1, 2, 3]], dtype=np.float32)
                 ordered_pts = order_points(raw_pts)
+                board_quad = ordered_pts
 
                 xs = ordered_pts[:, 0]
                 ys = ordered_pts[:, 1]
@@ -160,7 +162,7 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
                 print(f"   • Bottom-Right: ({int(ordered_pts[2][0])}, {int(ordered_pts[2][1])})")
                 print(f"   • Bottom-Left:  ({int(ordered_pts[3][0])}, {int(ordered_pts[3][1])})")
                 print("   • ArUco scanning is PAUSED (Zero jitter).")
-                print("   • Ball rebound tracking is ACTIVE. Ready to throw ball!")
+                print("   • Directional ball rebound tracking is ACTIVE!")
                 print("   • Press [L] again to unlock if you move the camera/laptop.")
                 print("=" * 65 + "\n")
             else:
@@ -178,6 +180,7 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
             is_locked = False
             locked_board_tags = None
             H_matrix = None
+            board_quad = None
             send_tracker_status([], is_locked=False)
 
             print("\n" + "=" * 65)
@@ -299,25 +302,44 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
                     mx, my = meas
                     flight_history.append((frame_idx, mx, my))
                     ball_trail.append((int(mx), int(my)))
-                    if len(flight_history) > 18:
+                    if len(flight_history) > 30:
                         flight_history.pop(0)
                     if len(ball_trail) > 35:
                         ball_trail.pop(0)
 
-                    # Rebound trajectory calculation (tuned for 60 FPS)
-                    if len(flight_history) >= 5 and cooldown_frames == 0:
+                    # Directional Rebound trajectory calculation
+                    if len(flight_history) >= 6 and cooldown_frames == 0 and board_quad is not None:
                         for idx in [-2, -3, -4]:
                             if abs(idx) >= len(flight_history):
                                 continue
                             fp, xp, yp = flight_history[idx]
-                            if (board_min_x - 30 <= xp <= board_max_x + 30) and (board_min_y - 30 <= yp <= board_max_y + 30):
-                                f_before, x_before, y_before = flight_history[0]
-                                f_after, x_after, y_after = flight_history[-1]
-                                v_in = np.hypot(xp - x_before, yp - y_before)
-                                v_out = np.hypot(x_after - xp, y_after - yp)
 
-                                # Velocity thresholds adapted for 60 FPS:
-                                if v_in >= 15.0 and v_out >= 10.0:
+                            # 1. Whiteboard Quad Boundary Check: reject points outside the physical whiteboard
+                            dist = cv2.pointPolygonTest(board_quad, (float(xp), float(yp)), True)
+                            if dist < -15.0:
+                                continue
+
+                            # 2. Directional Vectors: approach vector vs rebound vector
+                            idx_before = max(0, len(flight_history) + idx - 5)
+                            f_before, x_before, y_before = flight_history[idx_before]
+                            f_after, x_after, y_after = flight_history[-1]
+
+                            dx_in = xp - x_before
+                            dy_in = yp - y_before
+                            v_in = float(np.hypot(dx_in, dy_in))
+
+                            dx_out = x_after - xp
+                            dy_out = y_after - yp
+                            v_out = float(np.hypot(dx_out, dy_out))
+
+                            # Must have significant motion approaching and rebounding
+                            if v_in >= 15.0 and v_out >= 10.0:
+                                dot = (dx_in * dx_out) + (dy_in * dy_out)
+                                cos_angle = dot / (v_in * v_out)
+
+                                # In free flight: cos_angle >= 0.70 (straight continuous arc).
+                                # In a physical rebound: cos_angle <= 0.35 (trajectory bends sharply or reverses).
+                                if cos_angle <= 0.35:
                                     hit_counter += 1
                                     cooldown_frames = 35
                                     flight_history.clear()
@@ -330,12 +352,13 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
                                     ny = max(0.0, min(1.0, raw_ny))
 
                                     active_splash = {'pt': (int(xp), int(yp)), 'nx': nx, 'ny': ny, 'frames': 45}
+                                    angle_deg = float(np.degrees(np.arccos(np.clip(cos_angle, -1.0, 1.0))))
 
-                                    print(f"\n💥 [IMPACT #{hit_counter}]")
-                                    print(f"   • Raw Camera Pixel:   ({xp:.0f}, {yp:.0f})")
+                                    print(f"\n💥 [IMPACT #{hit_counter}] Rebound Deflection={angle_deg:.1f}° (cos={cos_angle:.2f})")
+                                    print(f"   • Impact Pixel:       ({xp:.0f}, {yp:.0f})")
                                     print(f"   • Transform Output:   Raw X={raw_nx:.3f}, Raw Y={raw_ny:.3f}")
                                     print(f"   • Normalized Sent:    X={nx:.3f}, Y={ny:.3f} -> Projector Server")
-                                    print(f"   • Board Bounding Box: X=[{int(board_min_x)}, {int(board_max_x)}], Y=[{int(board_min_y)}, {int(board_max_y)}]\n")
+                                    print(f"   • Approach / Rebound: in={v_in:.0f}px, out={v_out:.0f}px\n")
                                     send_hit_to_projector(nx, ny, hit_counter)
                                     break
                 else:
