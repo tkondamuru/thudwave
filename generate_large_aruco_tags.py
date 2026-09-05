@@ -1,18 +1,13 @@
 """
-Generates large, high-contrast, print-ready ArUco markers for the Whiteboard corners.
+Generates large ArUco markers optimized for single-sheet A4 sticker paper (2 columns x 2 rows).
 Dictionary: DICT_4X4_50
 Corner mapping:
-  - Tag 3: Top-Left (TL)
-  - Tag 2: Top-Right (TR)
-  - Tag 1: Bottom-Right (BR)
-  - Tag 0: Bottom-Left (BL)
+  - Top-Left (TL): Tag 3
+  - Top-Right (TR): Tag 2
+  - Bottom-Left (BL): Tag 0
+  - Bottom-Right (BR): Tag 1
 
-Outputs:
-  - tag3_top_left.png
-  - tag2_top_right.png
-  - tag1_bottom_right.png
-  - tag0_bottom_left.png
-  - print_markers.html (Printable 4-inch layout ready for Safari/Chrome Cmd+P)
+Fits all 4 markers on 1 single A4 sheet, aligned for half-cut / 2x2 sticker paper.
 """
 
 import cv2
@@ -32,40 +27,34 @@ tag_info = [
     (0, "TAG 0 - BOTTOM-LEFT (BL)", "tag0_bottom_left.png"),
 ]
 
-# Generate 1200x1200px PNGs with wide quiet white borders
+# Generate 1000x1000px high-contrast square markers with 10% white quiet zone
 for tid, label, filename in tag_info:
-    # 800px marker
     if hasattr(cv2.aruco, 'generateImageMarker'):
         raw_marker = cv2.aruco.generateImageMarker(dictionary, tid, 800)
     else:
         raw_marker = cv2.aruco.drawMarker(dictionary, tid, 800)
 
-    # 1200x1200px white canvas (gives 200px quiet zone on all sides for max contrast)
-    canvas = np.ones((1200, 1200), dtype=np.uint8) * 255
-    canvas[150:950, 200:1000] = raw_marker
-
-    # Add corner label text
-    canvas_bgr = cv2.cvtColor(canvas, cv2.COLOR_GRAY2BGR)
-    cv2.putText(canvas_bgr, label, (220, 1060),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0, 0, 0), 3, cv2.LINE_AA)
-    cv2.putText(canvas_bgr, "THUD-WAVE CORNER TARGET", (220, 1110),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (120, 120, 120), 2, cv2.LINE_AA)
+    # 1000x1000 white canvas with 100px white quiet zone border
+    canvas = np.ones((1000, 1000), dtype=np.uint8) * 255
+    canvas[100:900, 100:900] = raw_marker
 
     out_path = os.path.join(MARKERS_DIR, filename)
-    cv2.imwrite(out_path, canvas_bgr)
-    print(f"  [OK] Created: {filename} (4.5-inch high-res printable marker)")
+    cv2.imwrite(out_path, canvas)
+    print(f"  [OK] Created clean square marker: {filename}")
 
-# Generate Printable HTML Sheet (print_markers.html)
-# Formatted for standard 8.5" x 11" paper with cut lines
+# Generate A4 Single-Sheet 2x2 Layout (print_markers.html)
 html_content = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Printable ArUco Whiteboard Markers (4x4 Inches)</title>
+<title>A4 Sticker Sheet - 4 Whiteboard Markers (2x2 Grid)</title>
 <style>
   @page {
-    size: letter;
-    margin: 0.4in;
+    size: A4 portrait;
+    margin: 6mm;
+  }
+  * {
+    box-sizing: border-box;
   }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -74,90 +63,150 @@ html_content = """<!DOCTYPE html>
     background: #fff;
     color: #000;
   }
-  .page {
-    page-break-after: always;
+  .instructions {
+    text-align: center;
+    padding: 12px;
+    background: #f0f4f8;
+    border-bottom: 2px solid #ccc;
+    margin-bottom: 8px;
+  }
+  .instructions h2 {
+    margin: 0 0 6px 0;
+    font-size: 18px;
+  }
+  .instructions p {
+    margin: 0 0 10px 0;
+    font-size: 13px;
+    color: #444;
+  }
+  .print-btn {
+    font-size: 16px;
+    padding: 8px 22px;
+    cursor: pointer;
+    background: #007aff;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-weight: bold;
+  }
+
+  /* A4 2x2 Grid Container */
+  .a4-page {
+    width: 198mm;
+    height: 282mm;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    border: 1px dashed #bbb;
+    position: relative;
+  }
+
+  /* Halfway Cut-Line Indicators (Horizontal & Vertical Center) */
+  .cut-line-h {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    height: 0;
+    border-top: 1px dashed #888;
+    pointer-events: none;
+  }
+  .cut-line-v {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    border-left: 1px dashed #888;
+    pointer-events: none;
+  }
+
+  .sticker-quad {
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: space-around;
-    height: 98vh;
-  }
-  .page:last-child {
-    page-break-after: avoid;
-  }
-  .marker-card {
-    border: 2px dashed #999;
-    padding: 16px;
-    border-radius: 8px;
+    justify-content: center;
+    padding: 6mm;
     text-align: center;
-    width: 4.8in;
-    box-sizing: border-box;
   }
+
   .marker-img {
-    width: 3.8in;
-    height: 3.8in;
+    width: 88mm;
+    height: 88mm;
+    max-width: 3.5in;
+    max-height: 3.5in;
     display: block;
-    margin: 0 auto;
+    border: 1px solid #ddd;
   }
+
   .marker-title {
-    font-size: 20px;
-    font-weight: bold;
-    margin-top: 10px;
-    letter-spacing: 1px;
+    font-size: 15px;
+    font-weight: 800;
+    margin-top: 6px;
+    letter-spacing: 0.5px;
   }
-  .marker-sub {
-    font-size: 13px;
+
+  .marker-desc {
+    font-size: 11px;
     color: #555;
-    margin-top: 4px;
+    margin-top: 2px;
+    font-weight: 600;
   }
-  .instructions {
-    text-align: center;
-    padding: 20px;
-    border-bottom: 2px solid #ccc;
-    margin-bottom: 10px;
-  }
+
   @media print {
-    .no-print { display: none; }
+    .no-print { display: none !important; }
+    body { margin: 0; padding: 0; }
+    .a4-page {
+      border: none;
+      width: 100%;
+      height: 100vh;
+      page-break-inside: avoid;
+    }
   }
 </style>
 </head>
 <body>
 
 <div class="instructions no-print">
-  <h2>🎯 Printable Whiteboard Corner Markers (4" x 4")</h2>
-  <p>These large 4-inch markers allow your Mac webcam to lock onto the whiteboard from across the room in under 1 second.</p>
-  <button onclick="window.print()" style="font-size: 18px; padding: 10px 24px; cursor: pointer; background: #007aff; color: #fff; border: none; border-radius: 8px; font-weight: bold;">
-    🖨️ Print Markers (Cmd + P)
+  <h2>🎯 A4 Sticker Sheet — All 4 Markers on 1 Page (2x2 Grid)</h2>
+  <p>Formatted for A4 sticker paper with a halfway split. 2 markers per column, exactly ~3.5" to 4" each.</p>
+  <button class="print-btn" onclick="window.print()">
+    🖨️ Print 1-Page Sticker Sheet (Ctrl + P)
   </button>
 </div>
 
-<!-- PAGE 1: Top Corners -->
-<div class="page">
-  <div class="marker-card">
+<div class="a4-page">
+  <!-- Halfway Cut Guidlines -->
+  <div class="cut-line-h"></div>
+  <div class="cut-line-v"></div>
+
+  <!-- TOP-LEFT: TAG 3 -->
+  <div class="sticker-quad">
     <img class="marker-img" src="markers/tag3_top_left.png" alt="Tag 3">
-    <div class="marker-title">TAG 3 ➔ TOP-LEFT CORNER (TL)</div>
-    <div class="marker-sub">Tape to the upper-left corner of your whiteboard</div>
+    <div class="marker-title">TAG 3 ➔ TOP-LEFT (TL)</div>
+    <div class="marker-desc">Stick on Upper-Left Corner of Whiteboard</div>
   </div>
 
-  <div class="marker-card">
+  <!-- TOP-RIGHT: TAG 2 -->
+  <div class="sticker-quad">
     <img class="marker-img" src="markers/tag2_top_right.png" alt="Tag 2">
-    <div class="marker-title">TAG 2 ➔ TOP-RIGHT CORNER (TR)</div>
-    <div class="marker-sub">Tape to the upper-right corner of your whiteboard</div>
+    <div class="marker-title">TAG 2 ➔ TOP-RIGHT (TR)</div>
+    <div class="marker-desc">Stick on Upper-Right Corner of Whiteboard</div>
   </div>
-</div>
 
-<!-- PAGE 2: Bottom Corners -->
-<div class="page">
-  <div class="marker-card">
+  <!-- BOTTOM-LEFT: TAG 0 -->
+  <div class="sticker-quad">
     <img class="marker-img" src="markers/tag0_bottom_left.png" alt="Tag 0">
-    <div class="marker-title">TAG 0 ➔ BOTTOM-LEFT CORNER (BL)</div>
-    <div class="marker-sub">Tape to the lower-left corner of your whiteboard</div>
+    <div class="marker-title">TAG 0 ➔ BOTTOM-LEFT (BL)</div>
+    <div class="marker-desc">Stick on Lower-Left Corner of Whiteboard</div>
   </div>
 
-  <div class="marker-card">
+  <!-- BOTTOM-RIGHT: TAG 1 -->
+  <div class="sticker-quad">
     <img class="marker-img" src="markers/tag1_bottom_right.png" alt="Tag 1">
-    <div class="marker-title">TAG 1 ➔ BOTTOM-RIGHT CORNER (BR)</div>
-    <div class="marker-sub">Tape to the lower-right corner of your whiteboard</div>
+    <div class="marker-title">TAG 1 ➔ BOTTOM-RIGHT (BR)</div>
+    <div class="marker-desc">Stick on Lower-Right Corner of Whiteboard</div>
   </div>
 </div>
 
@@ -169,6 +218,6 @@ html_path = os.path.join(OUTPUT_DIR, "print_markers.html")
 with open(html_path, "w", encoding="utf-8") as f:
     f.write(html_content)
 
-print(f"\n[OK] Successfully generated markers in: {MARKERS_DIR}")
-print(f"[OK] Printable HTML sheet saved: {html_path}")
-print("   (Open print_markers.html in Safari/Chrome and press Cmd+P to print at exact 4x4 inch size!)")
+print(f"\n[OK] Generated clean square markers in: {MARKERS_DIR}")
+print(f"[OK] Saved 1-page A4 sticker layout: {html_path}")
+print("   (Open print_markers.html in browser and print 1 page!)")
