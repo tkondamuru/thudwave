@@ -9,8 +9,9 @@ Turn any passive whiteboard or wall into an **interactive, impact-sensing gaming
 Traditional interactive gaming walls (like Lü Interactive or MultiBall) cost between **$5,000 and $25,000**, requiring proprietary infrared LIDAR bars, specialized touch sensors, and industrial computers.
 
 **Project THUD-WAVE** achieves the same responsive experience using **100% commodity consumer hardware**:
+* **Ball Tracking**: High-speed HSV color segmentation, frame differencing, and Kalman velocity estimation tracking fast-moving projectiles at 60 FPS.
+* **Wall Impact Point Detection**: Vector kinematics calculating the exact physical rebound vertex ($\cos(\theta) \le -0.42$) to pinpoint the impact pixel on the whiteboard without attaching physical sensors.
 * **The "Visual Haptic" Concept**: When a player throws a physical ball against the wall, their hand and ears perceive a physical impact ("thud"). By instantly triggering an explosive kinetic shockwave, particle sparks, and spatial synthesizer audio at the exact coordinate of impact with sub-frame latency, the human brain perceives the wall as a massive digital touch screen.
-* **Pure Optical Sensing**: No wires, piezo sensors, or microphones attached to the wall. The camera monitors the ball's trajectory and detects the exact physical rebound vertex when the ball bounces off the board.
 * **Zero External Server Dependencies**: Built purely on Python 3 Standard Library, OpenCV, and vanilla HTML5 Canvas / Web Audio API.
 
 ---
