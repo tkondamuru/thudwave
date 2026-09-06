@@ -178,3 +178,21 @@ python detect_whiteboard_hits.py
 1. **Throw Ratio Sweet Spot**: Position the projector so its natural optical beam matches your whiteboard width ($\text{Distance} \approx \text{Width} \times 1.2$). This concentrates all lumens onto the board and maximizes brightness.
 2. **Ambient Lighting**: Place a warm lamp or spotlight behind the player aiming toward the flight path. The board remains high-contrast, while the ball stays brightly lit for the camera.
 3. **HSV Mask Tuning**: Press **`[M]`** in the tracker window. The ball should show up as a solid white circle against a black background. Adjust `LOWER_ORANGE` in `config.py` if your lighting changes.
+
+---
+
+## 📋 Roadmap & Things to Do (Next Steps)
+
+1. **🏎️ Real-Time Pitch Speedometer (Exit Velocity / Radar Gun)**
+   * Convert pixel displacement into real physical units ($v = \Delta d / \Delta t$) using calibrated whiteboard dimensions.
+   * Broadcast exit velocity via SSE to display real-time speed metrics (e.g. `"THROW SPEED: 28.5 MPH"`) with fiery visual haptics on high-speed throws.
+
+2. **🛡️ Color-Agnostic Low-Light Tracking (Night & Dark Room Invariance)**
+   * Implement adaptive MOG2/KNN background subtraction and high-pass temporal frame differencing across the static whiteboard quad.
+   * Eliminate dependence on strict neon HSV thresholds so any projectile (white baseball, gray foam ball, tennis ball) tracks reliably under dim room lighting and projected color changes.
+
+3. **👥 Multi-Ball & Simultaneous Multiplayer Tracking**
+   * Multi-color HSV segmentation pipeline (e.g., Player 1 = Orange Ball, Player 2 = Neon Green Ball).
+   * Run concurrent Kalman filter state estimators to track dual projectiles in flight simultaneously.
+   * Build competitive 2-player split scoring and cooperative arcade battle modes.
+
