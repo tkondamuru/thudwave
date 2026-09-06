@@ -63,6 +63,17 @@ def broadcast_lock(locked):
             q.put(event)
 
 
+def broadcast_reset():
+    """Broadcasts game reset event to all connected browsers."""
+    event = {
+        "event": "RESET",
+        "timestamp_ms": int(time.time() * 1000)
+    }
+    with clients_lock:
+        for q in client_queues:
+            q.put(event)
+
+
 class ProjectorServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
@@ -138,6 +149,11 @@ class ProjectorHTTPHandler(http.server.SimpleHTTPRequestHandler):
             locked = params.get('locked', ['0'])[0] in ['1', 'true', 'True']
             broadcast_lock(locked)
             self._send_json({"status": "ok", "locked": locked})
+
+        elif url.path in ['/reset', '/restart']:
+            # Reset / restart game on all connected projectors
+            broadcast_reset()
+            self._send_json({"status": "ok", "action": "reset"})
 
         elif url.path == '/calibration':
             # Retrieve saved 4-pin corner coordinates

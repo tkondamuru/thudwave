@@ -26,6 +26,7 @@ from aruco_detector import ArUcoTagDetector
 
 SERVER_URL = "http://127.0.0.1:8000/hit"
 STATUS_URL = "http://127.0.0.1:8000/tracker_status"
+RESET_URL = "http://127.0.0.1:8000/reset"
 
 def send_hit_to_projector(nx, ny, hit_num):
     """Sends normalized hit coordinate [0.0 to 1.0] asynchronously to projector server."""
@@ -33,6 +34,17 @@ def send_hit_to_projector(nx, ny, hit_num):
         try:
             url = f"{SERVER_URL}?x={nx:.3f}&y={ny:.3f}&num={hit_num}"
             req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=0.5):
+                pass
+        except Exception:
+            pass
+    threading.Thread(target=_send, daemon=True).start()
+
+def send_game_reset():
+    """Sends game reset / restart command asynchronously to projector server."""
+    def _send():
+        try:
+            req = urllib.request.Request(RESET_URL)
             with urllib.request.urlopen(req, timeout=0.5):
                 pass
         except Exception:
@@ -193,6 +205,21 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
             print("   • Press [L] when all 4 corners are visible to re-lock.")
             print("=" * 65 + "\n")
 
+    def reset_game():
+        nonlocal hit_counter, cooldown_frames
+        hit_counter = 0
+        cooldown_frames = 0
+        flight_history.clear()
+        ball_trail.clear()
+        tracker.reset()
+        detector.reset()
+        send_game_reset()
+        print("\n" + "=" * 65)
+        print(" 🔄 [GAME RESET] Sent restart command to web projector!")
+        print("   • All 5 throws reloaded, score reset to 0.")
+        print("   • Ball tracking buffers & Kalman filters cleared.")
+        print("=" * 65 + "\n")
+
     # Terminal keyboard listener thread
     def on_terminal_input():
         nonlocal quit_requested
@@ -204,6 +231,8 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
                 cmd = line.strip().lower()
                 if cmd in ['l', 'lock']:
                     toggle_lock()
+                elif cmd in ['r', 'reset', 'restart']:
+                    reset_game()
                 elif cmd in ['q', 'quit']:
                     quit_requested = True
                     break
@@ -218,8 +247,8 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
     print("=" * 65)
     print(" • Web Projector: http://localhost:8000")
     print(" • Markers: [3] Top-Left | [2] Top-Right | [1] Bottom-Right | [0] Bottom-Left")
-    print(" • NO AUTO-LOCK: Press [L] or [l] to Lock/Unlock (in Window or Terminal)")
-    print(" • Press [Q] to Quit, [R] to Rotate Preview")
+    print(" • Press [L] to Lock/Unlock (in Window or Terminal)")
+    print(" • Press [R] to Reset Game, [Q] to Quit")
     print("=" * 65 + "\n")
 
     frame_idx = 0
@@ -228,7 +257,7 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
     last_broadcast_time = 0.0
     last_broadcast_keys = None
     gui_available = show_gui
-    window_name = "Whiteboard Tracker ([L] Lock/Unlock | [Q] Quit | [R] Rotate)"
+    window_name = "Whiteboard Tracker ([L] Lock | [R] Reset Game | [Q] Quit)"
 
     if gui_available:
         try:
@@ -455,7 +484,7 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
 
             rec_indicator = " [REC 🔴]" if video_writer else ""
             cv2.putText(frame, st_text + rec_indicator, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.52, st_col, 2, cv2.LINE_AA)
-            metrics = f"{w}x{h} | {fps_display:.0f}FPS | Hits: {hit_counter} | [L] Lock | [M] Mask | [Q] Quit"
+            metrics = f"{w}x{h} | {fps_display:.0f}FPS | Hits: {hit_counter} | [L] Lock | [R] Reset | [Q] Quit"
             cv2.putText(frame, metrics, (max(12, w - 460), 22), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (220, 220, 220), 1, cv2.LINE_AA)
 
             # Write frame to video if recording
@@ -471,10 +500,12 @@ def run_tracker(camera_index=None, show_gui=True, rotation=0, record_file=None):
                         break
                     elif key in [ord('l'), ord('L')]:
                         toggle_lock()
+                    elif key in [ord('r'), ord('R')]:
+                        reset_game()
                     elif key in [ord('m'), ord('M')]:
                         show_mask = not show_mask
                         print(f"  [Debug] Mask preview: {'ON' if show_mask else 'OFF'}")
-                    elif key in [ord('r'), ord('R')]:
+                    elif key in [ord('o'), ord('O')]:
                         rotation = (rotation + 90) % 360
                         print(f"\n  [Orientation] Frame rotated to {rotation}°")
                 except Exception:

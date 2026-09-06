@@ -276,6 +276,11 @@
             isGameOver = false;
             confetti.length = 0;
             updateHUD();
+            try {
+                const metrics = getBoardMetrics();
+                spawnScorePop(metrics.center.x, metrics.center.y - 30, "⚡ GAME RESET! ⚡", "#00ffcc");
+                playChime(587.33, 'sine', 0.25);
+            } catch (e) {}
         }
 
         // Floating score popup engine
@@ -295,12 +300,13 @@
         const confetti = [];
         function spawnConfetti() {
             const colors = ['#00ffff', '#ff007f', '#ffea00', '#39ff14', '#ffffff', '#ff5500'];
+            const metrics = getBoardMetrics();
             for (let i = 0; i < 180; i++) {
                 confetti.push({
-                    x: canvas.width / 2 + (Math.random() - 0.5) * 300,
-                    y: canvas.height / 2 - 120 + (Math.random() - 0.5) * 150,
-                    vx: (Math.random() - 0.5) * 26,
-                    vy: -14 - Math.random() * 16,
+                    x: metrics.center.x + (Math.random() - 0.5) * Math.min(320, metrics.width * 0.7),
+                    y: metrics.center.y - 60 + (Math.random() - 0.5) * 120,
+                    vx: (Math.random() - 0.5) * 22,
+                    vy: -12 - Math.random() * 14,
                     size: 8 + Math.random() * 10,
                     color: colors[Math.floor(Math.random() * colors.length)],
                     tilt: Math.random() * 10,
@@ -429,6 +435,39 @@
             return { nx, ny };
         }
 
+        // Calculates bounding box and maximum fitting bullseye circle for whiteboard
+        function getBoardMetrics() {
+            const W = canvas.width;
+            const H = canvas.height;
+            const p0 = { x: corners[0].x * W, y: corners[0].y * H }; // TL
+            const p1 = { x: corners[1].x * W, y: corners[1].y * H }; // TR
+            const p2 = { x: corners[2].x * W, y: corners[2].y * H }; // BR
+            const p3 = { x: corners[3].x * W, y: corners[3].y * H }; // BL
+
+            const minX = Math.min(p0.x, p1.x, p2.x, p3.x);
+            const maxX = Math.max(p0.x, p1.x, p2.x, p3.x);
+            const minY = Math.min(p0.y, p1.y, p2.y, p3.y);
+            const maxY = Math.max(p0.y, p1.y, p2.y, p3.y);
+
+            const width = maxX - minX;
+            const height = maxY - minY;
+            const center = mapWhiteboardToScreen(0.5, 0.5);
+
+            // Maximum radius to fit circles snugly inside the whiteboard bounding rectangle
+            const maxRadius = Math.max(70, (Math.min(width, height) / 2) * 0.94);
+
+            return {
+                minX, maxX, minY, maxY,
+                width, height,
+                center,
+                maxRadius,
+                r10: maxRadius,
+                r25: maxRadius * 0.72,
+                r50: maxRadius * 0.44,
+                r100: Math.max(18, maxRadius * 0.18)
+            };
+        }
+
         // Active shockwave ripple animations
         const ripples = [];
 
@@ -441,6 +480,7 @@
                 return;
             }
 
+            const metrics = getBoardMetrics();
             const targetCenter = mapWhiteboardToScreen(targetPos.nx, targetPos.ny);
             const dist = Math.hypot(screenPt.x - targetCenter.x, screenPt.y - targetCenter.y);
 
@@ -449,22 +489,22 @@
             let color = "#888888";
             let palette = { outer: '#888888', secondary: '#444444' };
 
-            if (dist <= 30) {
+            if (dist <= metrics.r100) {
                 points = 100;
                 label = "🎯 BULLSEYE! +100";
                 color = "#ffea00";
                 palette = { outer: '#ffea00', secondary: '#ffffff' };
-            } else if (dist <= 75) {
+            } else if (dist <= metrics.r50) {
                 points = 50;
                 label = "INNER RING +50";
                 color = "#ff007f";
                 palette = { outer: '#ff007f', secondary: '#00ffff' };
-            } else if (dist <= 120) {
+            } else if (dist <= metrics.r25) {
                 points = 25;
                 label = "MID RING +25";
                 color = "#00ffcc";
                 palette = { outer: '#00ffcc', secondary: '#39ff14' };
-            } else if (dist <= 165) {
+            } else if (dist <= metrics.r10) {
                 points = 10;
                 label = "OUTER RING +10";
                 color = "#0088ff";
@@ -526,9 +566,10 @@
 
         function triggerTestHit() {
             // Random point near or inside the bullseye
+            const metrics = getBoardMetrics();
             const targetCenter = mapWhiteboardToScreen(targetPos.nx, targetPos.ny);
             const angle = Math.random() * Math.PI * 2;
-            const dist = Math.random() * 180;
+            const dist = Math.random() * (metrics.r10 * 1.15);
             const px = targetCenter.x + Math.cos(angle) * dist;
             const py = targetCenter.y + Math.sin(angle) * dist;
             const norm = mapScreenToWhiteboard(px, py);
@@ -566,9 +607,10 @@
             }
 
             // In Game Mode: check if user is clicking to drag the bullseye target
+            const metrics = getBoardMetrics();
             const targetScreen = mapWhiteboardToScreen(targetPos.nx, targetPos.ny);
             const distToTarget = Math.hypot(mouseX - targetScreen.x, mouseY - targetScreen.y);
-            if (distToTarget <= TARGET_MAX_RADIUS) {
+            if (distToTarget <= metrics.r10) {
                 isDraggingTarget = true;
                 canvas.style.cursor = 'grabbing';
                 return;
@@ -609,9 +651,10 @@
                 localStorage.setItem('thudwave_target_pos', JSON.stringify(targetPos));
                 canvas.style.cursor = 'grabbing';
             } else {
+                const metrics = getBoardMetrics();
                 const targetScreen = mapWhiteboardToScreen(targetPos.nx, targetPos.ny);
                 const distToTarget = Math.hypot(e.clientX - targetScreen.x, e.clientY - targetScreen.y);
-                canvas.style.cursor = (distToTarget <= TARGET_MAX_RADIUS) ? 'grab' : 'default';
+                canvas.style.cursor = (distToTarget <= metrics.r10) ? 'grab' : 'default';
             }
         });
 
@@ -735,54 +778,56 @@
                 // -------------------------------------------------------------
                 // 3. Render Arcade Bullseye Target (Game Mode)
                 // -------------------------------------------------------------
+                const metrics = getBoardMetrics();
                 const targetCenter = mapWhiteboardToScreen(targetPos.nx, targetPos.ny);
                 const tx = targetCenter.x;
                 const ty = targetCenter.y;
+                const { r10, r25, r50, r100 } = metrics;
 
                 ctx.save();
 
                 // Outer 10 PTS Ring
                 ctx.beginPath();
-                ctx.arc(tx, ty, 165, 0, Math.PI * 2);
+                ctx.arc(tx, ty, r10, 0, Math.PI * 2);
                 ctx.fillStyle = 'rgba(0, 136, 255, 0.12)';
                 ctx.fill();
                 ctx.strokeStyle = '#0088ff';
-                ctx.lineWidth = 4;
+                ctx.lineWidth = Math.max(3, r10 * 0.024);
                 ctx.shadowColor = '#0088ff';
-                ctx.shadowBlur = 15;
+                ctx.shadowBlur = 16;
                 ctx.stroke();
 
                 // Mid 25 PTS Ring
                 ctx.beginPath();
-                ctx.arc(tx, ty, 120, 0, Math.PI * 2);
+                ctx.arc(tx, ty, r25, 0, Math.PI * 2);
                 ctx.fillStyle = 'rgba(0, 255, 204, 0.16)';
                 ctx.fill();
                 ctx.strokeStyle = '#00ffcc';
-                ctx.lineWidth = 4;
+                ctx.lineWidth = Math.max(3, r10 * 0.024);
                 ctx.shadowColor = '#00ffcc';
                 ctx.shadowBlur = 18;
                 ctx.stroke();
 
                 // Inner 50 PTS Ring
                 ctx.beginPath();
-                ctx.arc(tx, ty, 75, 0, Math.PI * 2);
+                ctx.arc(tx, ty, r50, 0, Math.PI * 2);
                 ctx.fillStyle = 'rgba(255, 0, 127, 0.22)';
                 ctx.fill();
                 ctx.strokeStyle = '#ff007f';
-                ctx.lineWidth = 5;
+                ctx.lineWidth = Math.max(4, r10 * 0.03);
                 ctx.shadowColor = '#ff007f';
                 ctx.shadowBlur = 22;
                 ctx.stroke();
 
                 // 100 PTS Bullseye Center
                 ctx.beginPath();
-                ctx.arc(tx, ty, 30, 0, Math.PI * 2);
+                ctx.arc(tx, ty, r100, 0, Math.PI * 2);
                 ctx.fillStyle = '#ffea00';
                 ctx.shadowColor = '#ffea00';
                 ctx.shadowBlur = 30;
                 ctx.fill();
                 ctx.strokeStyle = '#ffffff';
-                ctx.lineWidth = 4;
+                ctx.lineWidth = Math.max(3, r10 * 0.025);
                 ctx.stroke();
 
                 // Target Crosshairs
@@ -790,35 +835,42 @@
                 ctx.lineWidth = 2;
                 ctx.shadowBlur = 0;
                 ctx.beginPath();
-                ctx.moveTo(tx - 175, ty);
-                ctx.lineTo(tx + 175, ty);
-                ctx.moveTo(tx, ty - 175);
-                ctx.lineTo(tx, ty + 175);
+                ctx.moveTo(tx - r10 - 12, ty);
+                ctx.lineTo(tx + r10 + 12, ty);
+                ctx.moveTo(tx, ty - r10 - 12);
+                ctx.lineTo(tx, ty + r10 + 12);
                 ctx.stroke();
 
                 // Point Labels on Target Rings
-                ctx.font = 'bold 15px Segoe UI, sans-serif';
+                const numFontSize = Math.max(12, Math.round(r10 * 0.085));
+                ctx.font = `bold ${numFontSize}px Segoe UI, sans-serif`;
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.shadowColor = '#000000';
                 ctx.shadowBlur = 4;
-                ctx.fillText('10', tx, ty - 142);
-                ctx.fillText('10', tx, ty + 142);
-                ctx.fillText('25', tx, ty - 98);
-                ctx.fillText('25', tx, ty + 98);
-                ctx.fillText('50', tx, ty - 52);
-                ctx.fillText('50', tx, ty + 52);
+
+                const pos10 = (r10 + r25) / 2;
+                const pos25 = (r25 + r50) / 2;
+                const pos50 = (r50 + r100) / 2;
+
+                ctx.fillText('10', tx, ty - pos10);
+                ctx.fillText('10', tx, ty + pos10);
+                ctx.fillText('25', tx, ty - pos25);
+                ctx.fillText('25', tx, ty + pos25);
+                ctx.fillText('50', tx, ty - pos50);
+                ctx.fillText('50', tx, ty + pos50);
 
                 // Center Bullseye Label
-                ctx.font = 'bold 16px Segoe UI, sans-serif';
+                const bullFontSize = Math.max(13, Math.round(r100 * 0.48));
+                ctx.font = `bold ${bullFontSize}px Segoe UI, sans-serif`;
                 ctx.fillStyle = '#000000';
                 ctx.fillText('100', tx, ty);
 
                 // Subtle drag instruction below target
-                ctx.font = '12px Segoe UI, sans-serif';
+                ctx.font = `${Math.max(11, Math.round(r10 * 0.065))}px Segoe UI, sans-serif`;
                 ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
-                ctx.fillText('✥ Drag target to reposition', tx, ty + 185);
+                ctx.fillText('✥ Drag target to reposition', tx, ty + r10 + 18);
 
                 ctx.restore();
             }
@@ -953,38 +1005,50 @@
             }
 
             // -------------------------------------------------------------
-            // 7. Game Over Celebration Banner
+            // 7. Game Over Celebration Banner (Strictly fitted inside whiteboard bounds)
             // -------------------------------------------------------------
             if (isGameOver) {
                 ctx.save();
-                const cardW = Math.min(520, W * 0.85);
-                const cardH = 260;
-                const cardX = (W - cardW) / 2;
-                const cardY = (H - cardH) / 2;
+                const metrics = getBoardMetrics();
+
+                // Scale card to fit strictly inside the calibrated whiteboard bounding box
+                const cardW = Math.max(260, Math.min(metrics.width * 0.88, 500));
+                const cardH = Math.max(160, Math.min(metrics.height * 0.68, 250));
+                const cardX = metrics.center.x - cardW / 2;
+                const cardY = metrics.center.y - cardH / 2;
 
                 // Glowing Backdrop Card
-                ctx.fillStyle = 'rgba(10, 15, 25, 0.94)';
+                ctx.fillStyle = 'rgba(10, 15, 25, 0.95)';
                 ctx.strokeStyle = '#ffea00';
-                ctx.lineWidth = 4;
+                ctx.lineWidth = Math.max(2, Math.min(4, cardH * 0.015));
                 ctx.shadowColor = '#ffea00';
-                ctx.shadowBlur = 35;
+                ctx.shadowBlur = 30;
                 ctx.beginPath();
-                ctx.roundRect(cardX, cardY, cardW, cardH, 20);
+                ctx.roundRect(cardX, cardY, cardW, cardH, Math.min(20, cardH * 0.08));
                 ctx.fill();
                 ctx.stroke();
 
-                // Title
-                ctx.font = 'bold 36px Segoe UI, sans-serif';
-                ctx.fillStyle = '#ffea00';
+                // Dynamic proportional font scaling
+                const titleSize = Math.max(16, Math.round(cardH * 0.15));
+                const scoreSize = Math.max(22, Math.round(cardH * 0.20));
+                const ratingSize = Math.max(12, Math.round(cardH * 0.10));
+                const promptSize = Math.max(11, Math.round(cardH * 0.085));
+
                 ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+
+                // Title
+                ctx.font = `bold ${titleSize}px Segoe UI, sans-serif`;
+                ctx.fillStyle = '#ffea00';
                 ctx.shadowColor = '#ffea00';
-                ctx.shadowBlur = 20;
-                ctx.fillText('🏆 ROUND COMPLETE!', W / 2, cardY + 55);
+                ctx.shadowBlur = 16;
+                ctx.fillText('🏆 ROUND COMPLETE!', metrics.center.x, cardY + cardH * 0.22);
 
                 // Final Score
-                ctx.font = 'bold 44px Segoe UI, sans-serif';
+                ctx.font = `bold ${scoreSize}px Segoe UI, sans-serif`;
                 ctx.fillStyle = '#ffffff';
-                ctx.fillText(`${totalScore} / 500 PTS`, W / 2, cardY + 115);
+                ctx.shadowBlur = 10;
+                ctx.fillText(`${totalScore} / 500 PTS`, metrics.center.x, cardY + cardH * 0.48);
 
                 // Rating Badge
                 let rating = "ROOKIE GUNNER 🎯";
@@ -992,16 +1056,18 @@
                 else if (totalScore >= 250) rating = "🥈 EXCELLENT MARKSMAN!";
                 else if (totalScore >= 100) rating = "🥉 GOOD SHOT!";
 
-                ctx.font = 'bold 20px Segoe UI, sans-serif';
+                ctx.font = `bold ${ratingSize}px Segoe UI, sans-serif`;
                 ctx.fillStyle = '#00ffcc';
-                ctx.fillText(rating, W / 2, cardY + 160);
+                ctx.shadowColor = '#00ffcc';
+                ctx.shadowBlur = 10;
+                ctx.fillText(rating, metrics.center.x, cardY + cardH * 0.70);
 
                 // Restart Prompt Button
-                ctx.font = 'bold 18px Segoe UI, sans-serif';
+                ctx.font = `bold ${promptSize}px Segoe UI, sans-serif`;
                 ctx.fillStyle = '#ffea00';
                 ctx.shadowColor = '#ffea00';
-                ctx.shadowBlur = 10;
-                ctx.fillText('⚡ Click Anywhere or Press [R] to Play Again ⚡', W / 2, cardY + 215);
+                ctx.shadowBlur = 8;
+                ctx.fillText('⚡ Click, Press [R], or Tracker [R] to Play Again ⚡', metrics.center.x, cardY + cardH * 0.88);
 
                 ctx.restore();
             }
@@ -1047,6 +1113,8 @@
                         if (data.locked && isCalibrationMode) {
                             toggleCalibration();
                         }
+                    } else if (data.event === 'RESET') {
+                        resetGameRound();
                     }
                 } catch (err) {
                     console.error("Error parsing event:", err);
