@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Project THUD-WAVE: Arcade Bullseye</title>
+    <title>Project THUD-WAVE: Whiteboard Projector Canvas (Base Template)</title>
     <style>
         * {
             margin: 0;
@@ -31,28 +31,22 @@
             position: absolute;
             top: 15px;
             left: 20px;
-            right: 20px;
             z-index: 10;
             color: #00ffcc;
             font-size: 14px;
-            background: rgba(10, 10, 15, 0.88);
-            padding: 10px 20px;
-            border-radius: 8px;
-            border: 1px solid rgba(0, 255, 204, 0.35);
+            background: rgba(10, 10, 15, 0.85);
+            padding: 8px 16px;
+            border-radius: 6px;
+            border: 1px solid rgba(0, 255, 204, 0.3);
             display: flex;
             align-items: center;
-            justify-content: space-between;
-            backdrop-filter: blur(6px);
+            gap: 16px;
+            backdrop-filter: blur(4px);
             transition: opacity 0.3s;
         }
         #hud.hidden {
             opacity: 0;
             pointer-events: none;
-        }
-        .hud-left, .hud-right {
-            display: flex;
-            align-items: center;
-            gap: 16px;
         }
         .status-dot {
             width: 10px;
@@ -66,54 +60,25 @@
             background-color: #00ff88;
             box-shadow: 0 0 8px #00ff88;
         }
-        .badge {
-            font-weight: 800;
-            padding: 4px 12px;
-            border-radius: 6px;
-            font-size: 15px;
-            letter-spacing: 0.5px;
-        }
-        .badge-score {
-            background: rgba(255, 234, 0, 0.15);
-            border: 1px solid #ffea00;
-            color: #ffea00;
-            box-shadow: 0 0 10px rgba(255, 234, 0, 0.3);
-        }
-        .badge-throws {
-            background: rgba(0, 255, 204, 0.15);
-            border: 1px solid #00ffcc;
-            color: #00ffcc;
-        }
         .btn {
             background: #111;
             color: #00ffcc;
             border: 1px solid #00ffcc;
-            padding: 6px 14px;
-            border-radius: 5px;
-            font-size: 13px;
-            font-weight: bold;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
             cursor: pointer;
             transition: all 0.2s;
         }
         .btn:hover {
             background: #00ffcc;
             color: #000;
-            box-shadow: 0 0 12px #00ffcc;
-        }
-        .btn-gold {
-            color: #ffea00;
-            border-color: #ffea00;
-        }
-        .btn-gold:hover {
-            background: #ffea00;
-            color: #000;
-            box-shadow: 0 0 12px #ffea00;
         }
         #tracker-pill {
             font-size: 12px;
             font-weight: bold;
-            padding: 5px 12px;
-            border-radius: 5px;
+            padding: 4px 10px;
+            border-radius: 4px;
             background: rgba(0, 0, 0, 0.6);
             border: 1px solid #888;
             color: #aaa;
@@ -128,10 +93,10 @@
             z-index: 10;
             color: #ffffff;
             font-size: 14px;
-            background: rgba(0, 0, 0, 0.88);
-            padding: 10px 26px;
+            background: rgba(0, 0, 0, 0.85);
+            padding: 10px 24px;
             border-radius: 20px;
-            border: 1px solid rgba(255, 255, 255, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.2);
             text-align: center;
             pointer-events: none;
             transition: opacity 0.3s;
@@ -143,22 +108,17 @@
 </head>
 <body>
     <div id="hud">
-        <div class="hud-left">
-            <div><span id="conn-dot" class="status-dot"></span> <span id="conn-text">Connecting...</span></div>
-            <div id="badge-score" class="badge badge-score">Score: 0</div>
-            <div id="badge-throws" class="badge badge-throws">Throws: 0 / 5</div>
-            <button class="btn btn-gold" onclick="resetGameRound()">Reset Round [R]</button>
-        </div>
-        <div class="hud-right">
-            <button class="btn" id="calib-btn" onclick="toggleCalibration()">Mode: Adjust Pins [C]</button>
-            <button class="btn" onclick="triggerTestHit()">Test Throw [T]</button>
-            <div id="tracker-pill" style="display: none;"></div>
-            <div style="color: #888; font-size: 11px;">[F11] Fullscreen | [C] Pins | [R] Reset</div>
-        </div>
+        <div><span id="conn-dot" class="status-dot"></span> <span id="conn-text">Connecting to Python...</span></div>
+        <div id="hit-counter">Hits: 0</div>
+        <button class="btn" id="calib-btn" onclick="toggleCalibration()">Mode: Adjust Pins [C]</button>
+        <button class="btn" onclick="triggerTestHit()">Test Hit [T]</button>
+        <button class="btn" onclick="resetCalibration()">Reset Pins</button>
+        <div id="tracker-pill" style="display: none;"></div>
+        <div style="color: #888; font-size: 11px;">[F11] Fullscreen | [C] Mode | Arrow keys nudge pin</div>
     </div>
 
     <div id="calib-guide">
-        📍 <b>Pin Calibration Mode</b>: Drag 4 pins to align with physical whiteboard edges. Press <b>[C]</b> for Arcade Game.
+        📍 <b>Pin Calibration Mode</b>: Drag 4 pins to align with physical whiteboard edges. Press <b>[C]</b> for Game Mode.
     </div>
 
     <canvas id="canvas"></canvas>
@@ -171,17 +131,18 @@
         const calibBtn = document.getElementById('calib-btn');
         const connDot = document.getElementById('conn-dot');
         const connText = document.getElementById('conn-text');
-        const badgeScore = document.getElementById('badge-score');
-        const badgeThrows = document.getElementById('badge-throws');
+        const hitCounter = document.getElementById('hit-counter');
         const trackerPill = document.getElementById('tracker-pill');
 
-        let isCalibrationMode = true; // Start in calibration mode
+        let totalHits = 0;
+        let isCalibrationMode = true; // Start in calibration mode to let user verify/align pins
         let activeHandleIndex = -1;
         let hoveredHandleIndex = -1;
         let selectedHandleIndex = 0; // For arrow key nudging
         const HANDLE_RADIUS = 20;
 
         // 4 Calibration Corners in Normalized Screen Space (0.0 to 1.0)
+        // Order: Top-Left (0), Top-Right (1), Bottom-Right (2), Bottom-Left (3)
         let corners = [
             { x: 0.15, y: 0.15 }, // TL
             { x: 0.85, y: 0.15 }, // TR
@@ -220,6 +181,7 @@
         }
         fetchServerCalibration();
 
+        // 3. Save calibration both to localStorage AND server
         function saveCalibration() {
             hasSavedCalibration = true;
             localStorage.setItem('thudwave_corners', JSON.stringify(corners));
@@ -233,84 +195,15 @@
         function updateGuideText() {
             if (isCalibrationMode) {
                 if (hasSavedCalibration) {
-                    calibGuide.innerHTML = `📍 <b>Previous Pins Restored</b>: Showing saved pin positions. Drag pins if projector moved, or press <b>[C]</b> for Arcade Game.`;
+                    calibGuide.innerHTML = `📍 <b>Previous Pins Restored</b>: Showing saved pin positions. Drag pins if projector moved, or press <b>[C]</b> for Game Mode.`;
                 } else {
-                    calibGuide.innerHTML = `🎯 <b>Pin Calibration Mode</b>: Drag 4 pins to align with whiteboard edges. Press <b>[C]</b> for Arcade Game.`;
+                    calibGuide.innerHTML = `🎯 <b>Pin Calibration Mode</b>: Drag 4 pins to align with whiteboard edges. Press <b>[C]</b> for Game Mode.`;
                 }
             }
         }
 
-        // -------------------------------------------------------------
-        // Arcade Bullseye Target & Game Mechanics
-        // -------------------------------------------------------------
-        let targetPos = { nx: 0.5, ny: 0.5 }; // Position in normalized whiteboard space (0.0 - 1.0)
-        let isDraggingTarget = false;
-        const TARGET_MAX_RADIUS = 165; // Screen pixel radius of outer 10-point ring
-
-        // Load saved target position if exists
-        const savedTarget = localStorage.getItem('thudwave_target_pos');
-        if (savedTarget) {
-            try {
-                const parsed = JSON.parse(savedTarget);
-                if (parsed && typeof parsed.nx === 'number' && typeof parsed.ny === 'number') {
-                    targetPos = parsed;
-                }
-            } catch (e) {}
-        }
-
-        const MAX_THROWS = 5;
-        let currentThrows = 0;
-        let totalScore = 0;
-        let throwScores = [];
-        let isGameOver = false;
-
-        function updateHUD() {
-            badgeScore.innerText = `Score: ${totalScore}`;
-            badgeThrows.innerText = `Throws: ${currentThrows} / ${MAX_THROWS}`;
-        }
-
-        function resetGameRound() {
-            currentThrows = 0;
-            totalScore = 0;
-            throwScores = [];
-            isGameOver = false;
-            confetti.length = 0;
-            updateHUD();
-        }
-
-        // Floating score popup engine
-        const scorePops = [];
-        function spawnScorePop(x, y, text, color) {
-            scorePops.push({
-                x: x,
-                y: y,
-                text: text,
-                color: color,
-                life: 1.0,
-                vy: -2.8
-            });
-        }
-
-        // Confetti Celebration Engine
-        const confetti = [];
-        function spawnConfetti() {
-            const colors = ['#00ffff', '#ff007f', '#ffea00', '#39ff14', '#ffffff', '#ff5500'];
-            for (let i = 0; i < 180; i++) {
-                confetti.push({
-                    x: canvas.width / 2 + (Math.random() - 0.5) * 300,
-                    y: canvas.height / 2 - 120 + (Math.random() - 0.5) * 150,
-                    vx: (Math.random() - 0.5) * 26,
-                    vy: -14 - Math.random() * 16,
-                    size: 8 + Math.random() * 10,
-                    color: colors[Math.floor(Math.random() * colors.length)],
-                    tilt: Math.random() * 10,
-                    tiltAngle: Math.random() * Math.PI * 2,
-                    tiltSpeed: 0.08 + Math.random() * 0.1,
-                    life: 1.0,
-                    gravity: 0.42 + Math.random() * 0.2
-                });
-            }
-        }
+        // Active shockwave ripple animations
+        const ripples = [];
 
         // -------------------------------------------------------------
         // Web Audio API Synthesizer (Instant 0ms Audio)
@@ -326,6 +219,7 @@
             return audioCtx;
         }
 
+        // Deep Sub-Bass BOOM! Sound
         function playBoomSound() {
             try {
                 const ctx = getAudioContext();
@@ -347,48 +241,8 @@
             } catch (e) {}
         }
 
-        function playChime(freq, type = 'sine', duration = 0.25) {
-            try {
-                const ctx = getAudioContext();
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
-                osc.type = type;
-                osc.frequency.setValueAtTime(freq, ctx.currentTime);
-                gain.gain.setValueAtTime(0.7, ctx.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
-                osc.connect(gain);
-                gain.connect(ctx.destination);
-                osc.start();
-                osc.stop(ctx.currentTime + duration);
-            } catch (e) {}
-        }
-
-        function playHitSound(points) {
-            playBoomSound();
-            if (points === 100) {
-                setTimeout(() => playChime(523.25, 'triangle', 0.35), 40);  // C5
-                setTimeout(() => playChime(659.25, 'triangle', 0.35), 140); // E5
-                setTimeout(() => playChime(783.99, 'triangle', 0.45), 240); // G5
-                setTimeout(() => playChime(1046.50, 'triangle', 0.8), 340); // C6
-            } else if (points >= 50) {
-                setTimeout(() => playChime(587.33, 'sine', 0.25), 60);
-                setTimeout(() => playChime(880.00, 'sine', 0.35), 160);
-            } else if (points >= 10) {
-                setTimeout(() => playChime(440.00, 'sine', 0.25), 60);
-            } else {
-                setTimeout(() => playChime(130.81, 'sawtooth', 0.25), 60);
-            }
-        }
-
-        function playVictorySound() {
-            setTimeout(() => playChime(523.25, 'triangle', 0.3), 0);
-            setTimeout(() => playChime(659.25, 'triangle', 0.3), 150);
-            setTimeout(() => playChime(783.99, 'triangle', 0.3), 300);
-            setTimeout(() => playChime(1046.50, 'triangle', 0.8), 450);
-        }
-
         // -------------------------------------------------------------
-        // Coordinate Transformation
+        // Canvas Resize & Coordinate Transformation
         // -------------------------------------------------------------
         function resize() {
             canvas.width = window.innerWidth;
@@ -397,6 +251,8 @@
         window.addEventListener('resize', resize);
         resize();
 
+        // Bilinear mapping from normalized whiteboard coords (nx, ny) [0..1]
+        // to calibrated screen pixel coordinates (px, py)
         function mapWhiteboardToScreen(nx, ny) {
             const W = canvas.width;
             const H = canvas.height;
@@ -429,66 +285,29 @@
             return { nx, ny };
         }
 
-        // Active shockwave ripple animations
-        const ripples = [];
-
         // -------------------------------------------------------------
-        // Hit Impact Evaluation (Bullseye Target Logic)
+        // Shockwave Impact Spawner (Ultra-Bright High-Lumen Kinetic Engine)
         // -------------------------------------------------------------
-        function evaluateHit(screenPt) {
-            if (isGameOver) {
-                resetGameRound();
-                return;
-            }
+        const PALETTES = [
+            { outer: '#00ffff', secondary: '#39ff14', core: '#ffffff' }, // Neon Cyan + Lime
+            { outer: '#ff007f', secondary: '#00ffff', core: '#ffffff' }, // Electric Magenta + Cyan
+            { outer: '#ffaa00', secondary: '#ff0055', core: '#ffffff' }, // Sunburst Amber + Fire
+            { outer: '#00ffaa', secondary: '#00aaff', core: '#ffffff' }, // Mint Green + Azure
+        ];
 
-            const targetCenter = mapWhiteboardToScreen(targetPos.nx, targetPos.ny);
-            const dist = Math.hypot(screenPt.x - targetCenter.x, screenPt.y - targetCenter.y);
+        function triggerImpact(nx, ny, label) {
+            const screenPt = mapWhiteboardToScreen(nx, ny);
+            totalHits++;
+            hitCounter.innerText = `Hits: ${totalHits}`;
 
-            let points = 0;
-            let label = "MISS";
-            let color = "#888888";
-            let palette = { outer: '#888888', secondary: '#444444' };
+            playBoomSound();
 
-            if (dist <= 30) {
-                points = 100;
-                label = "🎯 BULLSEYE! +100";
-                color = "#ffea00";
-                palette = { outer: '#ffea00', secondary: '#ffffff' };
-            } else if (dist <= 75) {
-                points = 50;
-                label = "INNER RING +50";
-                color = "#ff007f";
-                palette = { outer: '#ff007f', secondary: '#00ffff' };
-            } else if (dist <= 120) {
-                points = 25;
-                label = "MID RING +25";
-                color = "#00ffcc";
-                palette = { outer: '#00ffcc', secondary: '#39ff14' };
-            } else if (dist <= 165) {
-                points = 10;
-                label = "OUTER RING +10";
-                color = "#0088ff";
-                palette = { outer: '#0088ff', secondary: '#00ffff' };
-            } else {
-                points = 0;
-                label = "MISS! 0 PTS";
-                color = "#ff3366";
-                palette = { outer: '#ff3366', secondary: '#888888' };
-            }
+            const palette = PALETTES[totalHits % PALETTES.length];
 
-            currentThrows++;
-            totalScore += points;
-            throwScores.push(points);
-
-            spawnScorePop(screenPt.x, screenPt.y - 35, label, color);
-            playHitSound(points);
-            updateHUD();
-
-            // Spawn Kinetic Shockwave
+            // Radiating Kinetic Sparks
             const sparks = [];
-            const sparkCount = (points === 100) ? 30 : 18;
-            for (let i = 0; i < sparkCount; i++) {
-                const angle = (Math.PI * 2 / sparkCount) * i + (Math.random() - 0.5) * 0.4;
+            for (let i = 0; i < 18; i++) {
+                const angle = (Math.PI * 2 / 18) * i + (Math.random() - 0.5) * 0.4;
                 const speed = 6.0 + Math.random() * 9.0;
                 sparks.push({
                     x: screenPt.x,
@@ -506,33 +325,17 @@
                 y: screenPt.y,
                 radius: 12,
                 palette: palette,
-                label: label,
+                label: label || `HIT #${totalHits}`,
                 life: 1.0,
                 flashRadius: 15,
                 sparks: sparks
             });
-
-            if (currentThrows >= MAX_THROWS) {
-                isGameOver = true;
-                spawnConfetti();
-                playVictorySound();
-            }
-        }
-
-        function triggerImpact(nx, ny) {
-            const screenPt = mapWhiteboardToScreen(nx, ny);
-            evaluateHit(screenPt);
         }
 
         function triggerTestHit() {
-            // Random point near or inside the bullseye
-            const targetCenter = mapWhiteboardToScreen(targetPos.nx, targetPos.ny);
-            const angle = Math.random() * Math.PI * 2;
-            const dist = Math.random() * 180;
-            const px = targetCenter.x + Math.cos(angle) * dist;
-            const py = targetCenter.y + Math.sin(angle) * dist;
-            const norm = mapScreenToWhiteboard(px, py);
-            triggerImpact(norm.nx, norm.ny);
+            const rx = 0.2 + Math.random() * 0.6;
+            const ry = 0.2 + Math.random() * 0.6;
+            triggerImpact(rx, ry, `TEST #${totalHits + 1}`);
         }
 
         // -------------------------------------------------------------
@@ -560,23 +363,9 @@
                 return;
             }
 
-            if (isGameOver) {
-                resetGameRound();
-                return;
-            }
-
-            // In Game Mode: check if user is clicking to drag the bullseye target
-            const targetScreen = mapWhiteboardToScreen(targetPos.nx, targetPos.ny);
-            const distToTarget = Math.hypot(mouseX - targetScreen.x, mouseY - targetScreen.y);
-            if (distToTarget <= TARGET_MAX_RADIUS) {
-                isDraggingTarget = true;
-                canvas.style.cursor = 'grabbing';
-                return;
-            }
-
-            // Otherwise, click simulates an impact
+            // In Game Mode: click triggers impact
             const norm = mapScreenToWhiteboard(mouseX, mouseY);
-            triggerImpact(norm.nx, norm.ny);
+            triggerImpact(norm.nx, norm.ny, `CLICK #${totalHits + 1}`);
         });
 
         window.addEventListener('mousemove', (e) => {
@@ -602,16 +391,8 @@
                     hoveredHandleIndex = hovering;
                     canvas.style.cursor = (hovering !== -1) ? 'grab' : 'default';
                 }
-            } else if (isDraggingTarget) {
-                const norm = mapScreenToWhiteboard(e.clientX, e.clientY);
-                targetPos.nx = Math.max(0.1, Math.min(0.9, norm.nx));
-                targetPos.ny = Math.max(0.1, Math.min(0.9, norm.ny));
-                localStorage.setItem('thudwave_target_pos', JSON.stringify(targetPos));
-                canvas.style.cursor = 'grabbing';
             } else {
-                const targetScreen = mapWhiteboardToScreen(targetPos.nx, targetPos.ny);
-                const distToTarget = Math.hypot(e.clientX - targetScreen.x, e.clientY - targetScreen.y);
-                canvas.style.cursor = (distToTarget <= TARGET_MAX_RADIUS) ? 'grab' : 'default';
+                canvas.style.cursor = 'default';
             }
         });
 
@@ -620,14 +401,14 @@
                 saveCalibration();
             }
             activeHandleIndex = -1;
-            isDraggingTarget = false;
+            if (isCalibrationMode) {
+                canvas.style.cursor = (hoveredHandleIndex !== -1) ? 'grab' : 'default';
+            }
         });
 
         window.addEventListener('keydown', (e) => {
             if (e.key === 'c' || e.key === 'C') {
                 toggleCalibration();
-            } else if (e.key === 'r' || e.key === 'R') {
-                resetGameRound();
             } else if (e.key === 't' || e.key === 'T') {
                 triggerTestHit();
             } else if (e.key === 'h' || e.key === 'H') {
@@ -656,11 +437,23 @@
                 updateGuideText();
             } else {
                 saveCalibration();
-                calibBtn.innerText = "Mode: Arcade Game [C]";
-                calibBtn.style.borderColor = "#ffea00";
-                calibBtn.style.color = "#ffea00";
+                calibBtn.innerText = "Mode: Active Game [C]";
+                calibBtn.style.borderColor = "#ff3366";
+                calibBtn.style.color = "#ff3366";
                 calibGuide.classList.add('hidden');
             }
+        }
+
+        function resetCalibration() {
+            corners = [
+                { x: 0.15, y: 0.15 },
+                { x: 0.85, y: 0.15 },
+                { x: 0.85, y: 0.85 },
+                { x: 0.15, y: 0.85 }
+            ];
+            hasSavedCalibration = false;
+            saveCalibration();
+            updateGuideText();
         }
 
         // -------------------------------------------------------------
@@ -731,105 +524,13 @@
                     ctx.fill();
                 }
                 ctx.restore();
-            } else {
-                // -------------------------------------------------------------
-                // 3. Render Arcade Bullseye Target (Game Mode)
-                // -------------------------------------------------------------
-                const targetCenter = mapWhiteboardToScreen(targetPos.nx, targetPos.ny);
-                const tx = targetCenter.x;
-                const ty = targetCenter.y;
-
-                ctx.save();
-
-                // Outer 10 PTS Ring
-                ctx.beginPath();
-                ctx.arc(tx, ty, 165, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(0, 136, 255, 0.12)';
-                ctx.fill();
-                ctx.strokeStyle = '#0088ff';
-                ctx.lineWidth = 4;
-                ctx.shadowColor = '#0088ff';
-                ctx.shadowBlur = 15;
-                ctx.stroke();
-
-                // Mid 25 PTS Ring
-                ctx.beginPath();
-                ctx.arc(tx, ty, 120, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(0, 255, 204, 0.16)';
-                ctx.fill();
-                ctx.strokeStyle = '#00ffcc';
-                ctx.lineWidth = 4;
-                ctx.shadowColor = '#00ffcc';
-                ctx.shadowBlur = 18;
-                ctx.stroke();
-
-                // Inner 50 PTS Ring
-                ctx.beginPath();
-                ctx.arc(tx, ty, 75, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(255, 0, 127, 0.22)';
-                ctx.fill();
-                ctx.strokeStyle = '#ff007f';
-                ctx.lineWidth = 5;
-                ctx.shadowColor = '#ff007f';
-                ctx.shadowBlur = 22;
-                ctx.stroke();
-
-                // 100 PTS Bullseye Center
-                ctx.beginPath();
-                ctx.arc(tx, ty, 30, 0, Math.PI * 2);
-                ctx.fillStyle = '#ffea00';
-                ctx.shadowColor = '#ffea00';
-                ctx.shadowBlur = 30;
-                ctx.fill();
-                ctx.strokeStyle = '#ffffff';
-                ctx.lineWidth = 4;
-                ctx.stroke();
-
-                // Target Crosshairs
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-                ctx.lineWidth = 2;
-                ctx.shadowBlur = 0;
-                ctx.beginPath();
-                ctx.moveTo(tx - 175, ty);
-                ctx.lineTo(tx + 175, ty);
-                ctx.moveTo(tx, ty - 175);
-                ctx.lineTo(tx, ty + 175);
-                ctx.stroke();
-
-                // Point Labels on Target Rings
-                ctx.font = 'bold 15px Segoe UI, sans-serif';
-                ctx.fillStyle = '#ffffff';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.shadowColor = '#000000';
-                ctx.shadowBlur = 4;
-                ctx.fillText('10', tx, ty - 142);
-                ctx.fillText('10', tx, ty + 142);
-                ctx.fillText('25', tx, ty - 98);
-                ctx.fillText('25', tx, ty + 98);
-                ctx.fillText('50', tx, ty - 52);
-                ctx.fillText('50', tx, ty + 52);
-
-                // Center Bullseye Label
-                ctx.font = 'bold 16px Segoe UI, sans-serif';
-                ctx.fillStyle = '#000000';
-                ctx.fillText('100', tx, ty);
-
-                // Subtle drag instruction below target
-                ctx.font = '12px Segoe UI, sans-serif';
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
-                ctx.fillText('✥ Drag target to reposition', tx, ty + 185);
-
-                ctx.restore();
             }
 
-            // -------------------------------------------------------------
-            // 4. Render Active Kinetic Shockwaves
-            // -------------------------------------------------------------
+            // 3. Render Active Kinetic Shockwaves (Ultra-Bright Projector Optimized)
             for (let i = ripples.length - 1; i >= 0; i--) {
                 const r = ripples[i];
                 r.radius += 5.8;
-                r.life -= 0.016;
+                r.life -= 0.016; // Lasts ~60 frames (approx 1 second of vibrant, high-energy visuals)
 
                 if (r.life <= 0) {
                     ripples.splice(i, 1);
@@ -838,7 +539,7 @@
 
                 ctx.save();
 
-                // Center Flash Disc
+                // A. Explosive Center Flash Disc (illuminates the impact point)
                 if (r.flashRadius < 90) {
                     r.flashRadius += 5.0;
                     const flashGrad = ctx.createRadialGradient(r.x, r.y, 0, r.x, r.y, r.flashRadius);
@@ -851,7 +552,8 @@
                     ctx.fill();
                 }
 
-                // Primary Neon Ring
+                // B. Primary High-Lumen Shockwave Ring (Double Stroke: Wide Neon Glow + Pure White Core)
+                // 1. Wide Neon Bloom Glow
                 ctx.strokeStyle = r.palette.outer;
                 ctx.lineWidth = 18 * r.life;
                 ctx.shadowColor = r.palette.outer;
@@ -860,7 +562,7 @@
                 ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
                 ctx.stroke();
 
-                // Pure White Core
+                // 2. Pure White Core Line (100% Lamp Lumens)
                 ctx.strokeStyle = '#ffffff';
                 ctx.lineWidth = 5 * r.life;
                 ctx.shadowBlur = 0;
@@ -868,7 +570,26 @@
                 ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
                 ctx.stroke();
 
-                // Sparks
+                // C. Secondary Concentric Echo Ring
+                if (r.radius > 30) {
+                    const secRadius = r.radius * 0.65;
+                    ctx.strokeStyle = r.palette.secondary;
+                    ctx.lineWidth = 10 * r.life;
+                    ctx.shadowColor = r.palette.secondary;
+                    ctx.shadowBlur = 20;
+                    ctx.beginPath();
+                    ctx.arc(r.x, r.y, secRadius, 0, Math.PI * 2);
+                    ctx.stroke();
+
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.lineWidth = 3.5 * r.life;
+                    ctx.shadowBlur = 0;
+                    ctx.beginPath();
+                    ctx.arc(r.x, r.y, secRadius, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+
+                // D. Kinetic Flying Sparks & Streaks
                 if (r.sparks) {
                     for (const sp of r.sparks) {
                         sp.x += sp.vx;
@@ -895,113 +616,20 @@
                     }
                 }
 
-                ctx.restore();
-            }
-
-            // -------------------------------------------------------------
-            // 5. Floating Score Popups
-            // -------------------------------------------------------------
-            for (let i = scorePops.length - 1; i >= 0; i--) {
-                const sp = scorePops[i];
-                sp.y += sp.vy;
-                sp.life -= 0.018;
-
-                if (sp.life <= 0) {
-                    scorePops.splice(i, 1);
-                    continue;
-                }
-
-                ctx.save();
-                ctx.font = 'bold 30px Segoe UI, sans-serif';
+                // E. High-Contrast Text Badge (Black Outline + Glowing White Text)
+                ctx.font = 'bold 26px Segoe UI, Roboto, sans-serif';
                 ctx.textAlign = 'center';
+                const textY = r.y - r.radius - 20;
 
-                // Black outline
-                ctx.strokeStyle = `rgba(0, 0, 0, ${sp.life})`;
-                ctx.lineWidth = 8;
-                ctx.strokeText(sp.text, sp.x, sp.y);
+                ctx.strokeStyle = `rgba(0, 0, 0, ${r.life})`;
+                ctx.lineWidth = 7;
+                ctx.shadowBlur = 0;
+                ctx.strokeText(r.label, r.x, textY);
 
-                // Glowing text
-                ctx.fillStyle = sp.color;
-                ctx.shadowColor = sp.color;
+                ctx.fillStyle = `rgba(255, 255, 255, ${r.life})`;
+                ctx.shadowColor = r.palette.outer;
                 ctx.shadowBlur = 20;
-                ctx.fillText(sp.text, sp.x, sp.y);
-                ctx.restore();
-            }
-
-            // -------------------------------------------------------------
-            // 6. Confetti Celebration
-            // -------------------------------------------------------------
-            for (let i = confetti.length - 1; i >= 0; i--) {
-                const c = confetti[i];
-                c.x += c.vx;
-                c.y += c.vy;
-                c.vy += c.gravity;
-                c.vx *= 0.98;
-                c.tiltAngle += c.tiltSpeed;
-                c.tilt = Math.sin(c.tiltAngle) * 12;
-
-                ctx.save();
-                ctx.fillStyle = c.color;
-                ctx.beginPath();
-                ctx.ellipse(c.x, c.y, c.size / 2, Math.abs(c.tilt) / 2 + 2, c.tiltAngle, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.restore();
-
-                if (c.y > H + 50) {
-                    confetti.splice(i, 1);
-                }
-            }
-
-            // -------------------------------------------------------------
-            // 7. Game Over Celebration Banner
-            // -------------------------------------------------------------
-            if (isGameOver) {
-                ctx.save();
-                const cardW = Math.min(520, W * 0.85);
-                const cardH = 260;
-                const cardX = (W - cardW) / 2;
-                const cardY = (H - cardH) / 2;
-
-                // Glowing Backdrop Card
-                ctx.fillStyle = 'rgba(10, 15, 25, 0.94)';
-                ctx.strokeStyle = '#ffea00';
-                ctx.lineWidth = 4;
-                ctx.shadowColor = '#ffea00';
-                ctx.shadowBlur = 35;
-                ctx.beginPath();
-                ctx.roundRect(cardX, cardY, cardW, cardH, 20);
-                ctx.fill();
-                ctx.stroke();
-
-                // Title
-                ctx.font = 'bold 36px Segoe UI, sans-serif';
-                ctx.fillStyle = '#ffea00';
-                ctx.textAlign = 'center';
-                ctx.shadowColor = '#ffea00';
-                ctx.shadowBlur = 20;
-                ctx.fillText('🏆 ROUND COMPLETE!', W / 2, cardY + 55);
-
-                // Final Score
-                ctx.font = 'bold 44px Segoe UI, sans-serif';
-                ctx.fillStyle = '#ffffff';
-                ctx.fillText(`${totalScore} / 500 PTS`, W / 2, cardY + 115);
-
-                // Rating Badge
-                let rating = "ROOKIE GUNNER 🎯";
-                if (totalScore >= 400) rating = "🥇 LEGENDARY SHARPSHOOTER!";
-                else if (totalScore >= 250) rating = "🥈 EXCELLENT MARKSMAN!";
-                else if (totalScore >= 100) rating = "🥉 GOOD SHOT!";
-
-                ctx.font = 'bold 20px Segoe UI, sans-serif';
-                ctx.fillStyle = '#00ffcc';
-                ctx.fillText(rating, W / 2, cardY + 160);
-
-                // Restart Prompt Button
-                ctx.font = 'bold 18px Segoe UI, sans-serif';
-                ctx.fillStyle = '#ffea00';
-                ctx.shadowColor = '#ffea00';
-                ctx.shadowBlur = 10;
-                ctx.fillText('⚡ Click Anywhere or Press [R] to Play Again ⚡', W / 2, cardY + 215);
+                ctx.fillText(r.label, r.x, textY);
 
                 ctx.restore();
             }
@@ -1011,7 +639,7 @@
         requestAnimationFrame(render);
 
         // -------------------------------------------------------------
-        // Tracker Lock Status
+        // Tracker Lock Status (Only shown when [L] is pressed on tracker)
         // -------------------------------------------------------------
         function updateTrackerUI(data) {
             if (!data) return;
@@ -1033,20 +661,16 @@
 
             sse.onopen = () => {
                 connDot.classList.add('connected');
-                connText.innerText = "Python Connected";
+                connText.innerText = "Connected to Python Engine";
             };
 
             sse.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
                     if (data.event === 'HIT') {
-                        triggerImpact(data.nx, data.ny);
+                        triggerImpact(data.nx, data.ny, `HIT #${data.hit_num || totalHits + 1}`);
                     } else if (data.event === 'TRACKER_STATUS') {
                         updateTrackerUI(data);
-                        // When server sends locked = true, automatically enter Arcade Game Mode!
-                        if (data.locked && isCalibrationMode) {
-                            toggleCalibration();
-                        }
                     }
                 } catch (err) {
                     console.error("Error parsing event:", err);
@@ -1055,7 +679,7 @@
 
             sse.onerror = () => {
                 connDot.classList.remove('connected');
-                connText.innerText = "Connecting...";
+                connText.innerText = "Waiting for Python Engine...";
                 sse.close();
                 setTimeout(connectToServer, 2000);
             };
